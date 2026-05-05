@@ -1,0 +1,4 @@
+-keep class org.schabi.newpipe.extractor.** { *; }
+-keep class com.google.firebase.** { *; }
+-dontwarn org.mozilla.**
+-dontwarn org.jsoup.**

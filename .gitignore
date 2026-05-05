@@ -1,0 +1,21 @@
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+app/build
+/captures
+.externalNativeBuild
+.cxx
+
+# Kotlin
+.kotlin/
+
+# Sensitive — Firebase config (각자 설정)
+app/google-services.json
+local.properties
+
+# Gradle wrapper jar는 포함 (wrapper properties만으로 빌드 불가)
+!gradle/wrapper/gradle-wrapper.jar
