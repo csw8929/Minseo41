@@ -290,3 +290,423 @@ Content-Type: application/json
 3. **화질 선택**: 현재 HLS manifest가 있으면 그대로 사용 (ExoPlayer가 자동 품질 선택). 추후 adaptive format에서 특정 해상도 고정 옵션 추가 가능
 4. **영상 시간 표시**: RSS에 duration 정보가 없어 현재 0으로 표시. 재생 시작 후 ExoPlayer에서 채워넣는 방식으로 개선 가능
 5. **영상 다운로드**: 초기 요구사항에 있었으나 미구현. `adaptiveFormats`에서 최고화질 video+audio 선택 후 OkHttp로 저장하는 방식으로 추가 가능
+
+---
+
+## PlayerScreen 전면 리뉴얼 구현 (2026-05-05)
+
+design 문서: `docs/player-screen-renewal-2026-05-05.md` (Status: APPROVED, Mode: Builder)
+
+### 추가/변경 파일
+
+**신규 (10개)**
+- `service/SubFeedMediaSessionService.kt` — Media3 service 골격 (Step 9 player 이전은 보류)
+- `ui/player/PlayerControls.kt` — 가운데 3등분 ±30초/Play 큰 IconButton
+- `ui/player/PlayerTopBar.kt` — 뒤로/title/화질 pill/자막/PIP/옵션 메뉴
+- `ui/player/PlayerBottomBar.kt` — 시간/Slider/전체화면 토글
+- `ui/player/DoubleTapSkipOverlay.kt` — 좌/우 더블탭 핫존 + ripple
+- `ui/player/QualityMenu.kt` — HLS variants 화질 BottomSheet
+- `ui/player/CaptionMenu.kt` — 자막 트랙 BottomSheet
+- `ui/player/ResumeBanner.kt` — "X:XX부터 이어보기 / 처음부터" 배너
+- `data/CaptionTrack.kt` — `CaptionTrack`, `StreamInfo` 모델
+- `data/TimedTextToSrt.kt` — YouTube timedtext XML → SRT 변환
+- `data/AuthRepo.kt` — Firebase + Google Sign-In + runtime resource lookup
+
+**수정 (7개)**
+- `AndroidManifest.xml` — PIP 속성, FOREGROUND_SERVICE 권한, MediaSessionService 등록
+- `data/VideoExtractor.kt` — `getStreamUrl()` 제거, `getStreamInfo()` 추가
+- `data/NewPipeVideoExtractor.kt` — InnerTube `captions.captionTracks` 추출
+- `ui/SettingsScreen.kt` — Google 계정 연동 섹션
+- `ui/SettingsViewModel.kt` — `AuthRepo` 통합
+- `ui/PlayerViewModel.kt` — captions/quality/fullscreen/pip/banner state
+- `ui/PlayerScreen.kt` — 전면 재작성 (`useController=false` + Compose 오버레이)
+- `gradle/libs.versions.toml`, `app/build.gradle.kts` — 의존성 추가
+
+### 추가된 의존성
+
+| 라이브러리 | 버전 | 용도 |
+|---|---|---|
+| `kotlinx-coroutines-play-services` | 1.9.0 | `Tasks.await()` (기존 SyncRepo도 이미 사용 중이었음 — 누락 수정) |
+| `play-services-auth` | 21.2.0 | Google Sign-In |
+| `compose-material-icons-extended` | (composeBom) | Forward30/Replay30/Fullscreen/ClosedCaption 아이콘 |
+
+### 빌드 검증
+
+```
+BUILD SUCCESSFUL in 1m 24s
+43 actionable tasks: 13 executed, 30 up-to-date
+APK: app/build/outputs/apk/debug/Minseo41.apk
+```
+
+장애 해결 기록:
+1. `local.properties` 없음 → `D:\AndroidDK` 지정 (Minseo21 참고)
+2. `google-services.json` 없음 → placeholder 생성 (실제 Firebase 사용 시 user가 본인 파일로 교체)
+3. `androidx.activity.PictureInPictureModeChangedInfo` Unresolved → `addOnPictureInPictureModeChangedListener` 폐기, `LocalConfiguration` 변경 시 `Activity.isInPictureInPictureMode` 폴링으로 단순화
+4. `androidx.compose.ui.unit.dp` import 누락 → 추가
+
+빌드 경고: `GoogleSignIn`/`GoogleSignInClient`가 deprecated. Android 권장은 Credential Manager (`androidx.credentials`)로 마이그레이션. 동작은 정상이나 이후 별도 라운드에서 교체 가능.
+
+### 보류된 항목 (Step 9)
+
+design doc `Next Steps` 9번 — **MediaSessionService에 Player 이전 + 알림 컨트롤**.
+
+현재 상태:
+- service는 manifest 등록 + 골격 클래스만 (자체적으로 빈 ExoPlayer 인스턴스 생성)
+- `PlayerScreen`이 ExoPlayer를 직접 hold (화면 dispose 시 release)
+- 옵션 메뉴의 "백그라운드 재생: 켬/끔" 토글은 SharedPreferences만 갱신 — 실제 동작 영향 없음
+
+미보류 사유: PlayerScreen이 `MediaController`로 service의 player와 연결되도록 바꾸려면 비동기 connection + 화면 전환 race 가능성 (design doc Open Question #4). 별도 commit/세션에서 신중히.
+
+### 주요 인터페이스 변경
+
+**Before:**
+```kotlin
+interface VideoExtractor {
+    suspend fun getStreamUrl(videoId: String): String
+}
+```
+
+**After:**
+```kotlin
+interface VideoExtractor {
+    suspend fun getStreamInfo(videoId: String): StreamInfo
+}
+
+data class StreamInfo(
+    val streamUrl: String,
+    val captionTracks: List<CaptionTrack>,
+)
+```
+
+`PlayerViewModel.loadVideo()` 호출 한 번에 stream URL과 caption tracks를 동시에 받음 (InnerTube 응답 1회 호출 분).
+
+### Open Issues (다음 라운드)
+
+1. **Step 9 — MediaSessionService에 Player 이전**: 백그라운드 재생 옵션 실제 동작
+2. **Sign-In 마이그레이션**: GoogleSignIn → Credential Manager (`androidx.credentials`)
+3. **Cross-device 이어보기 실측**: 폴드 → 탭에서 Resume banner 노출 시나리오 3회 검증
+4. **`google-services.json` 진짜 파일 적용**: 현재 placeholder. 실제 Firebase 프로젝트의 파일로 교체 필요.
+
+### 설치 명령
+
+```bash
+adb -s R3CT70FY0ZP install -r app/build/outputs/apk/debug/Minseo41.apk
+```
+
+---
+
+## PlayerScreen 리뉴얼 — 후속 fix 및 단말 검증 (2026-05-05)
+
+design 문서 구현(위 섹션) 후 폴드(R3CT70FY0ZP)에 설치하면서 발견된 추가 이슈들과 그에 대한 해결을 시간순으로 기록한다.
+
+### A. 빌드 환경 — `local.properties` 누락
+
+**증상**: `./gradlew assembleDebug` 실행 시
+```
+SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable
+or by setting the sdk.dir path in your project's local properties file at
+'D:\workspace\Minseo41\local.properties'.
+```
+
+**원인**: 처음 클론된 상태로 `local.properties`가 없고, Windows 환경변수 `ANDROID_HOME`도 비어 있었다. 자동 탐색 위치(`%LOCALAPPDATA%\Android\Sdk`, `C:\Android\Sdk`)에도 SDK 없음.
+
+**해결**: 같은 workspace의 `D:\workspace\Minseo21\local.properties`에서 SDK 경로(`D:\AndroidDK`)를 발견. `D:\workspace\Minseo41\local.properties`를 같은 값으로 생성.
+
+```properties
+# local.properties (gitignore됨, 커밋 금지)
+sdk.dir=D\:\\AndroidDK
+```
+
+### B. `google-services.json` 누락 → placeholder → 진짜 파일
+
+**증상 1**: SDK 셋업 후 빌드 시
+```
+Execution failed for task ':app:processDebugGoogleServices'.
+> File google-services.json is missing.
+```
+
+**임시 해결**: 빌드 검증을 위해 `app/google-services.json` placeholder 작성. 단지 컴파일 통과용 가짜 값.
+
+**증상 2**: placeholder json으로 빌드 → 설치 → Sign-In 시 `ApiException statusCode=10` (DEVELOPER_ERROR). placeholder의 `client_id`가 실제 Firebase 프로젝트와 매치되지 않으니 당연한 실패.
+
+**최종 해결**: 진짜 Firebase 프로젝트(`ongoingview-3e904`, project_number `217716213799`) 생성. SHA-1 등록. Authentication > Google 활성화. Firestore 생성. `google-services.json` 다시 다운로드해 placeholder 교체.
+
+자세한 단계는 별도 문서: `docs/firebase-setup-2026-05-05.md`
+
+### C. protobuf 의존성 충돌 — Firestore vs NewPipe
+
+이 세션에서 가장 시간이 많이 든 디버깅. 세 단계의 충돌이 연쇄적으로 발견됐다.
+
+**시도 1 — `protolite-well-known-types` exclude (최초 상태)**
+```kotlin
+implementation(libs.firebase.firestore) {
+    exclude(group = "com.google.firebase", module = "protolite-well-known-types")
+}
+```
+초기 개발자가 적어둔 설정. 이전엔 Firestore를 실제로 호출 안 해서 잠재 버그가 가려져 있었음.
+
+**증상**: Sign-In 성공 직후 Firestore 첫 호출 시 crash:
+```
+java.lang.RuntimeException: Internal error in Cloud Firestore (25.1.1).
+Caused by: java.lang.NoClassDefFoundError: Failed resolution of: Lcom/google/type/LatLng;
+```
+Firestore 25.x는 protolite-well-known-types에 들어있는 LatLng를 사용한다. 그걸 exclude하면 시작 단계에서 죽는다.
+
+**시도 2 — exclude 제거 (protolite keep)**
+```kotlin
+implementation(libs.firebase.firestore)   // exclude 제거
+```
+**증상**: 빌드 단계에서
+```
+Duplicate class com.google.protobuf.* found in modules
+  protobuf-javalite-4.34.1.jar
+  protolite-well-known-types-18.0.0.aar
+```
+NewPipe Extractor 또는 다른 transitive가 `protobuf-javalite`를 끌고 들어와서 protolite와 동일 클래스 충돌.
+
+**시도 3 — `protobuf-javalite` exclude**
+```kotlin
+configurations.all {
+    exclude(group = "com.google.protobuf", module = "protobuf-javalite")
+}
+```
+**증상**: 다시 Firestore crash, 이번엔 다른 클래스:
+```
+NoClassDefFoundError: Failed resolution of: Lcom/google/protobuf/ByteString;
+```
+protolite도 javalite도 양쪽이 일부 클래스만 가지고 있다. **둘 중 어느 쪽을 빼도 다른 쪽에서 반대 클래스가 사라짐**. 하나만 keep으로는 해결 불가.
+
+**시도 4 — `proto-google-common-protos` 추가**
+```kotlin
+implementation(libs.firebase.firestore) {
+    exclude(group = "com.google.firebase", module = "protolite-well-known-types")
+}
+implementation(libs.proto.google.common.protos)   // LatLng를 별도로 제공
+```
+**증상**: `proto-google-common-protos`가 `protobuf-java` (full, lite 아님)을 끌고 들어와 또 Duplicate Class.
+
+**최종 해결 — NewPipe Extractor 의존성 자체 제거**
+
+코드 검토 결과 NewPipe Extractor 라이브러리는 사실상 **사용되지 않고 있었다**:
+- `NewPipeVideoExtractor.kt`에서 `org.schabi.newpipe.extractor.downloader.{Downloader,Request,Response}`를 import하지만, `OkHttpDownloader`가 `Downloader`를 extend만 하고 있고 그 인스턴스(`OkHttpDownloader.INSTANCE`)는 코드 어디에서도 호출되지 않는다.
+- 실제 HTTP 호출은 `OkHttpDownloader.companion`의 `get()`, `post()` static helper만 사용. 이건 OkHttp 직접 호출.
+- 채널 피드는 RSS XML pull parsing, 스트림 URL은 InnerTube API 직접 호출 — NewPipe의 Extractor 클래스를 한 번도 거치지 않는다.
+
+→ NewPipe 의존성을 제거하면 그 transitive로 따라오던 `protobuf-javalite`도 빠지고, Firestore가 끌고 오는 protolite-well-known-types만 남아 충돌이 깔끔하게 사라진다.
+
+**적용 변경**:
+1. `app/build.gradle.kts`에서 `implementation(libs.newpipe.extractor)` 제거
+2. `NewPipeVideoExtractor.kt`에서 NewPipe import 제거, `OkHttpDownloader`를 `private constructor() : Downloader()`에서 그냥 `object`로 단순화
+3. `firebase-firestore`는 exclude 없이 그대로 (protolite가 정상 동작)
+4. `proto-google-common-protos` / `configurations.all { exclude }` 등 시도 중에 추가했던 우회 모두 제거
+
+`libs.versions.toml`에는 `newpipe-extractor` 항목을 남겨뒀다 — 코드 정리 시점이라 dep만 끊은 상태. 향후 NewPipe v0.27.6+ 등에서 PoToken 기반 추출이 안정화되면 재도입 가능.
+
+### D. 회전(rotation) 동작 안 함
+
+**증상**: 단말을 가로로 돌려도 PlayerScreen이 portrait 그대로.
+
+**원인 1**: `PlayerScreen.kt`에서 전체화면 토글 시 명시적으로
+```kotlin
+} else {
+    act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    ...
+}
+```
+즉 평소 모드에서 portrait 강제. 단말 자동 회전 설정과 무관하게 portrait 고정.
+
+**원인 2** (잠재): `LocalContext.current as? ComponentActivity`가 Compose ContextWrapper 때문에 null로 떨어질 수 있어 `act.requestedOrientation` 설정 자체가 동작 안 함.
+
+**해결**:
+- 평소 모드 orientation을 `SCREEN_ORIENTATION_UNSPECIFIED`로 변경 → 단말 자동 회전 설정에 위임
+- `findComponentActivity()` extension function 추가, `ContextWrapper.baseContext`를 거슬러 올라가며 ComponentActivity를 안정적으로 찾음
+
+```kotlin
+private fun Context.findComponentActivity(): ComponentActivity? {
+    var ctx: Context = this
+    while (ctx is ContextWrapper) {
+        if (ctx is ComponentActivity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
+```
+
+전체화면 모드는 그대로 `SCREEN_ORIENTATION_LANDSCAPE` 강제.
+
+### E. status / navigation bar 영역과 콘텐츠 겹침
+
+**증상**: 전체화면 아닐 때 PlayerScreen의 영상이 status bar / navigation bar 영역까지 그려져 system bar와 겹침.
+
+**원인**: `MainActivity.onCreate()`에서 `enableEdgeToEdge()`를 호출하므로 Activity 전체가 edge-to-edge 모드. Compose 측에서 systemBars insets를 직접 처리해야 하는데 PlayerScreen이 `Box(Modifier.fillMaxSize())`만 쓰고 padding 없음.
+
+**해결**: 평소 모드에서만 systemBars insets만큼 padding, 전체화면에서는 풀스크린 유지:
+
+```kotlin
+Box(
+    modifier = Modifier
+        .fillMaxSize()
+        .background(Color.Black)
+        .then(
+            if (uiState.isFullscreen) Modifier
+            else Modifier.windowInsetsPadding(WindowInsets.systemBars)
+        ),
+)
+```
+
+### F. PIP 라이프사이클 — `addOnPictureInPictureModeChangedListener` API 변경
+
+**증상**: 빌드 시 컴파일 오류
+```
+Unresolved reference 'PictureInPictureModeChangedInfo'
+Unresolved reference 'isInPictureInPictureMode'
+```
+
+**원인**: `androidx.activity.PictureInPictureModeChangedInfo` 타입이 일부 환경에서 import 해석되지 않음 (활성 SDK 버전과 transitive 호환성 issue로 추정).
+
+**해결**: PIP listener 등록 패턴 자체를 단순화. PIP 진입/이탈은 `manifest`에 `configChanges="orientation|screenSize|...|screenLayout"`이 걸려 있어 Compose의 `LocalConfiguration.current`가 새 인스턴스로 갱신되는 시점에 `Activity.isInPictureInPictureMode`를 직접 폴링:
+
+```kotlin
+val configuration = LocalConfiguration.current
+LaunchedEffect(configuration) {
+    val isInPip = activity?.isInPictureInPictureMode == true
+    viewModel.setInPipMode(isInPip)
+    if (isInPip) controlsVisible = false
+}
+```
+
+listener 등록/해제 코드와 `Consumer<PictureInPictureModeChangedInfo>` import를 제거. PIP 진입은 그대로 `enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())`.
+
+### G. cross-device 이어보기 — JobCancellationException
+
+design doc + 첫 구현 직후 단말에서 검증 시 처음 발견.
+
+**증상**: 영상 30초 이상 시청하고 뒤로가기 → logcat:
+```
+SubFeedSync: savePosition start: uid=..., positionMs=1125237
+SubFeedSync: getPosition start: ...
+SubFeedSync: getPosition read failed
+  kotlinx.coroutines.JobCancellationException: Job was cancelled;
+  job=SupervisorJobImpl{Cancelling}@...
+SubFeedSync: savePosition write failed
+  kotlinx.coroutines.JobCancellationException: ...
+```
+
+**원인**: `PlayerScreen`이 dispose되면서 `PlayerViewModel`도 곧 `cleared` 상태로 진입 → `viewModelScope` cancel → 그 안에서 await 중인 Firestore call이 같이 취소됨. 화면 이탈 시점의 마지막 위치가 commit되지 못한다.
+
+**해결**: `SyncRepo`에 ViewModel 라이프사이클과 무관한 별도 process-level scope 도입.
+
+```kotlin
+@Singleton
+class SyncRepo @Inject constructor(...) {
+    // ViewModel scope이 cancel되어도 살아남는 detached scope.
+    private val detachedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    fun savePositionDetached(videoId: String, positionMs: Long) {
+        detachedScope.launch { savePosition(videoId, positionMs) }
+    }
+    ...
+}
+```
+
+`PlayerViewModel.savePositionNow()`와 `onPositionChanged()` 둘 다 `syncRepo.savePositionDetached(...)` fire-and-forget으로 위임.
+
+**현재 상태**: 첫 영상 commit은 성공해 cross-device resume 동작 확인 ("되네"). 다만 `StandaloneCoroutine was cancelled` 잔여 현상이 가끔 logcat에 보임 — 즉시 commit이 100% 보장되진 않는다. 향후 `Application` scope 또는 `ApplicationScope` Hilt module로 이전이 더 안전. 별도 commit 후속 작업.
+
+### H. 이어보기 단위 30초 → 10초
+
+**user 요청**: 가운데 ±버튼과 양면 더블탭의 스킵 단위가 30초는 너무 큰 것 같다. 10초로.
+
+**적용**:
+- `PlayerControls.kt`: `Forward30/Replay30` icon → `Forward10/Replay10`, contentDescription `"30초 …"` → `"10초 …"`
+- `DoubleTapSkipOverlay.kt`: 같은 icon 교체, ripple label `"-30초"`/`"+30초"` → `"-10초"`/`"+10초"`
+- `PlayerScreen.kt`: 4군데의 `30_000L` (가운데 ±버튼 onClick + 양면 더블탭 onSkipBack/onSkipForward) → `10_000L`
+
+cross-device debounce save 주기(`PlayerScreen.kt`의 `LaunchedEffect`에 있는 `delay(30_000L)`)는 그대로 30초 유지. user 요청은 ±스킵 단위에 한정.
+
+### I. 진단용 로그 태그 (디버깅 도구로 사용)
+
+위 단계들을 진단하기 위해 다섯 개 태그 도입:
+
+| 태그 | 위치 | 출력 내용 |
+|---|---|---|
+| `SubFeedAuth` | `data/AuthRepo.kt` | webClientId 해석, Sign-In intent 생성, Google account email/idToken 유무, Firebase signIn 결과, `ApiException.statusCode` |
+| `SubFeedSettingsVM` | `ui/SettingsViewModel.kt` | sign-in result extras, success/failure |
+| `SubFeedSettingsScreen` | `ui/SettingsScreen.kt` | launcher result code (0/-1), data 존재 여부 |
+| `SubFeedPlayerVM` | `ui/PlayerViewModel.kt` | loadVideo의 savedPosition, debounce save trigger, savePositionNow 호출 |
+| `SubFeedSync` | `data/SyncRepo.kt` | uid 상태, getPosition/savePosition start/ok/skip/failed |
+
+logcat 명령:
+```bash
+adb -s R3CT70FY0ZP logcat -s SubFeedAuth:V SubFeedSettingsVM:V SubFeedSettingsScreen:V SubFeedPlayerVM:V SubFeedSync:V AndroidRuntime:E '*:S'
+```
+
+이 태그들은 운영용은 아니고 디버깅용. 추후 동작이 안정되면 일부 정리 가능. 현재는 cross-device sync 진단에 가장 유용해 그대로 둔다.
+
+### J. 단말 검증 결과
+
+**단말**: 폴드 (R3CT70FY0ZP)
+**단말 셋업 트러블**: 첫 install 시 서명 불일치 (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) — 이전 macOS PC의 debug.keystore 서명과 현재 Windows PC의 debug.keystore 서명이 다름. uninstall 후 재설치로 해결. (구독 채널 SharedPreferences는 사라짐, YouTube Takeout XML로 다시 import 필요.)
+
+**검증한 시나리오**:
+- [x] 빌드 통과 (BUILD SUCCESSFUL)
+- [x] 앱 설치 + launch
+- [x] PlayerScreen 가운데 3등분 큰 컨트롤 + 양면 더블탭 ±10초 노출
+- [x] 자동 회전 동작 (단말 회전 잠금 해제 시 가로/세로 따라감)
+- [x] status/navigation bar와 안 겹침
+- [x] Settings → Google 계정 연동 성공 (`Firebase signIn ok: uid=VLc86xzggPdiDFn7ir1WW3enTx13`)
+- [x] 영상 재생 → 30초 이상 시청 → 뒤로가기 → 같은 영상 재진입 → ResumeBanner 노출 + 마지막 위치부터 재생
+
+**미검증 / 향후**:
+- [ ] 폴드 → 탭/플립으로 cross-device resume 실측 (단일 단말 self-resume만 확인됨)
+- [ ] PIP 진입/이탈
+- [ ] 백그라운드 재생 (Step 9 — MediaSessionService에 player 이전, 보류 상태)
+- [ ] 자막 트랙 fetch + ExoPlayer subtitle config (코드 경로는 있으나 실측 안 함)
+- [ ] 화질 메뉴 — HLS adaptive에서 해상도 선택 실측 안 함
+
+### K. `scripts/apk.sh` (workspace 공통 도구)
+
+`Minseo41/scripts/apk.sh`는 두 줄짜리 wrapper로, 부모 `D:\workspace\scripts\apk.sh` (workspace 공통 APK 매니저)에 `minseo41` 인자를 자동으로 넘긴다.
+
+```bash
+#!/usr/bin/env bash
+exec "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/apk.sh" minseo41 "$@"
+```
+
+workspace 공통 스크립트(`D:\workspace\scripts\apk.sh`)는 5개 Android 프로젝트(Minseo, Minseo21, Minseo3, **Minseo41**, MyCard)를 통합 관리하는 메뉴형 도구:
+
+- 프로젝트별 메뉴: install / build+install / uninstall / git branch+pull / logcat grep / build / releases 설치
+- 단말 자동 인식 + 별명 매핑: `R54Y1003KXN`(탭) / `R3CT70FY0ZP`(폴드) / `R3CX705W62D`(플립) / `T813128GB25301890106`(미니) / `R34YA0007ZJ`(xr)
+- 일괄 액션: 전 프로젝트 build all, build + releases/ 복사, 전 프로젝트 git pull
+
+사용:
+```bash
+bash scripts/apk.sh           # → 부모 스크립트의 Minseo41 메뉴로 바로 진입
+bash ../scripts/apk.sh        # → 프로젝트 선택 메뉴부터
+```
+
+logcat grep 액션은 매칭 라인을 자동으로 클립보드(Windows clip.exe / macOS pbcopy / Linux xclip)에 복사해 주는 기능까지 포함되어 있어 디버깅 시 편함.
+
+---
+
+## 관련 문서 (이 시점 기준 문서 맵)
+
+| 문서 | 용도 |
+|---|---|
+| `docs/design.md` | SubFeed 전체 design doc — 첫 라운드(MVP), Status: APPROVED |
+| `docs/player-screen-renewal-2026-05-05.md` | 두 번째 design doc — PlayerScreen 전면 리뉴얼, Status: APPROVED |
+| `docs/development-log.md` (이 문서) | 시간순 구현 / 디버깅 / 단말 검증 로그 |
+| `docs/firebase-setup-2026-05-05.md` | Firebase Console 셋업 step-by-step (재현 가이드) |
+| `docs/youtube-subscriptions-import-2026-05-05.md` | Google Takeout으로 구독 채널 일괄 import (XML 변환 포함) |
+
+---
+
+## 향후 정리 항목 (요약)
+
+- **Step 9 — MediaSessionService에 Player 이전**: 백그라운드 재생 옵션 토글이 실제 동작하도록. 현재는 prefs만 갱신, service 자체는 빈 골격.
+- **GoogleSignIn → Credential Manager**: Android 권장 API로 마이그레이션. `play-services-auth` 21.2의 GoogleSignIn은 deprecated 경고 5건 출력 중. 동작은 OK.
+- **detached scope 잔여 cancel**: `Application` scope 또는 별도 Hilt-injected `ApplicationScope`로 이전. 현재 첫 commit은 성공하나 가끔 후속 commit이 cancel되는 race 잔존.
+- **자막/화질/PIP/폴드↔탭 cross-device 실측**: 코드 경로 있음. 실 단말 검증 미완.
+- **`google-services.json` 보호**: 현재 `.gitignore`로 충분. CI가 생기면 GitHub Secrets로 주입 필요.
+- **`debug.keystore` 통일**: 다중 PC 빌드 시 같은 keystore 사용 또는 각 PC의 SHA-1을 Firebase 콘솔에 누적 등록. 현재는 Windows PC의 keystore만 등록되어 있음.
+

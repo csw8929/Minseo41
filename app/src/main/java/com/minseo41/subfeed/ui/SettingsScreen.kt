@@ -1,6 +1,7 @@
 package com.minseo41.subfeed.ui
 
 import android.net.Uri
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -33,6 +34,16 @@ fun SettingsScreen(
         }
     }
 
+    val signInLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        Log.d(
+            "SubFeedSettingsScreen",
+            "signIn launcher result: code=${result.resultCode}, hasData=${result.data != null}",
+        )
+        viewModel.handleSignInResult(result.data)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -52,6 +63,34 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            Text("Google 계정", style = MaterialTheme.typography.titleMedium)
+
+            if (uiState.signedInEmail != null) {
+                Text(
+                    "${uiState.signedInEmail} ✓",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedButton(
+                    onClick = { viewModel.signOut() },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("로그아웃")
+                }
+            } else {
+                Text(
+                    "다른 단말과 시청 위치를 동기화하려면 Google 계정 연동이 필요합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(
+                    onClick = { signInLauncher.launch(viewModel.signInIntent()) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Google 계정 연동")
+                }
+            }
+
+            HorizontalDivider()
+
             Text("구독 채널 import", style = MaterialTheme.typography.titleMedium)
 
             Button(

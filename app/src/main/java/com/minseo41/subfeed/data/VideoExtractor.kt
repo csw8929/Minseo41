@@ -6,5 +6,5 @@ import com.minseo41.subfeed.model.VideoItem
 // 구현체는 NewPipeVideoExtractor.kt 하나만 교체하면 됨.
 interface VideoExtractor {
     suspend fun getChannelFeed(channelUrl: String): List<VideoItem>
-    suspend fun getStreamUrl(videoId: String): String
+    suspend fun getStreamInfo(videoId: String): StreamInfo
 }

@@ -29,6 +29,13 @@ android {
         }
     }
 
+    applicationVariants.all {
+        outputs.all {
+            (this as com.android.build.gradle.internal.api.BaseVariantOutputImpl)
+                .outputFileName = "Minseo41.apk"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -56,6 +63,7 @@ dependencies {
     implementation(libs.compose.ui.graphics)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.material3)
+    implementation(libs.compose.material.icons.extended)
     debugImplementation(libs.compose.ui.tooling)
 
     // ExoPlayer / Media3
@@ -67,9 +75,7 @@ dependencies {
 
     // Firebase
     implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.firestore) {
-        exclude(group = "com.google.firebase", module = "protolite-well-known-types")
-    }
+    implementation(libs.firebase.firestore)
     implementation(libs.firebase.auth)
 
     // Hilt DI
@@ -79,9 +85,13 @@ dependencies {
 
     // Coroutines
     implementation(libs.coroutines.android)
+    implementation(libs.coroutines.play.services)
 
-    // NewPipe Extractor
-    implementation(libs.newpipe.extractor)
+    // Google Sign-In
+    implementation(libs.play.services.auth)
+
+    // OkHttp (NewPipe Extractor는 transitive로 protobuf를 끌고 들어와 Firestore와 충돌하므로 제거.
+    // 코드는 RSS 직접 파싱 + InnerTube API 직접 호출이라 NewPipe 라이브러리는 실제로 사용 안 됨)
     implementation(libs.okhttp)
 
     // Image loading
