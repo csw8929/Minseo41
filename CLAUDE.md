@@ -1,3 +1,84 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 프로젝트 개요
+
+**SubFeed** — YouTube 구독 채널의 오늘 영상을 광고 없이 재생하고, 여러 Android 기기 간 시청 위치를 동기화하는 개인용 Android 앱.
+패키지: `com.minseo41.subfeed` / min SDK 26 / target SDK 36 / Java 17 / Kotlin
+
+## 빌드 및 설치
+
+```bash
+# 디버그 APK 빌드
+./gradlew assembleDebug
+
+# 릴리즈 APK 빌드
+./gradlew assembleRelease
+
+# 연결된 기기에 설치
+./gradlew installDebug
+
+# 린트
+./gradlew lint
+
+# 특정 기기에 설치 (adb -s 사용)
+adb -s R54Y1003KXN install app/build/outputs/apk/debug/app-debug.apk
+```
+
+테스트 단말 serial은 상위 workspace CLAUDE.md 참고.
+
+## 아키텍처
+
+MVVM + Hilt DI. 단일 Activity (`MainActivity`) + Compose Navigation (3개 route).
+
+```
+feed  →  player/{videoId}
+feed  →  settings
+```
+
+### 레이어
+
+| 레이어 | 파일 | 역할 |
+|---|---|---|
+| UI | `ui/FeedScreen.kt`, `PlayerScreen.kt`, `SettingsScreen.kt` | Compose 화면 |
+| ViewModel | `ui/FeedViewModel.kt`, `PlayerViewModel.kt`, `SettingsViewModel.kt` | UiState(StateFlow) 관리 |
+| Data | `data/SubscriptionRepo.kt` | 채널 목록(SharedPreferences) + 오늘 영상 병렬 조회 |
+| Data | `data/SyncRepo.kt` | Firebase Firestore 시청 위치 읽기/쓰기 |
+| Data | `data/VideoExtractor.kt` | 인터페이스 (구현체 교체 지점) |
+| Data | `data/NewPipeVideoExtractor.kt` | VideoExtractor 구현체 — YouTube RSS 피드 파싱 + InnerTube API 스트림 URL 추출 |
+| DI | `di/AppModule.kt` | Hilt `SingletonComponent` 바인딩 |
+| Model | `model/` | `VideoItem`, `SubscribedChannel`, `WatchPosition` |
+
+### 핵심 설계 결정
+
+- **VideoExtractor 인터페이스** — NewPipe Extractor 버전이 바뀌거나 대체 시 `NewPipeVideoExtractor.kt`만 교체하면 됨. 다른 코드 변경 없음.
+- **채널 피드**: YouTube RSS (`youtube.com/feeds/videos.xml?channel_id=…`) — API 변경에 영향 없음, 채널당 최신 15개.
+- **스트림 URL**: YouTube InnerTube API — iOS → ANDROID_VR → TVHTML5 순서로 fallback. PoToken 불필요.
+- **시청 위치 동기화**: Firestore `users/{uid}/positions/{videoId}` — 충돌 시 더 큰 `positionMs` 우선. `PlayerViewModel`에서 30초 debounce 후 저장, 화면 이탈 시 즉시 저장.
+- **채널 목록**: SharedPreferences에 `|` 구분자로 직렬화 저장.
+
+## 구독 채널 import 방법
+
+1. Google Takeout → YouTube → `subscriptions.xml` 다운로드
+2. 앱 Settings 화면에서 XML 파일 선택 → 파싱 후 중복 제외 추가
+3. 또는 Settings에서 채널 URL 직접 입력
+
+## 주요 의존성
+
+- `NewPipeExtractor v0.26.1` (JitPack) — YouTube 스트림 추출 핵심. YouTube 정책 변경 시 깨질 수 있음. 업데이트 필요 시 `libs.versions.toml`의 `newpipe` 버전만 변경.
+- `Media3 ExoPlayer 1.5.1` — 동영상 재생. HLS manifest URL (`hls:` 접두사)과 직접 muxed URL 두 가지 처리.
+- `Firebase Firestore + Auth` — 기기 간 시청 위치 동기화. Google 로그인 필요.
+- `Hilt 2.52` — DI.
+- `Coil 2.7.0` — 썸네일 이미지 로딩.
+
+## 알려진 제약
+
+- NewPipe Extractor는 YouTube 업데이트 후 수일~수주 간 동작 불가 사례 있음 (핵심 위험 요소).
+- `google-services.json` 파일이 필요하나 VCS에 없음 — Firebase 콘솔에서 별도 발급 필요.
+- YouTube ToS 위반 가능성 인지하고 개인 사용 전제로 개발 중.
+
+---
 
 ## Skill routing
 
