@@ -689,15 +689,132 @@ logcat grep 액션은 매칭 라인을 자동으로 클립보드(Windows clip.ex
 
 ---
 
+## 채널 필터 + 즐겨찾기 + Room DB 도입 (2026-05-06)
+
+### 배경
+
+PlayerScreen 리뉴얼 직후 채널 필터/즐겨찾기 기능 요구가 나옴. 동시에 SharedPreferences 기반 채널 직렬화(`id;;name;;url|...`) 한계 때문에 필드 추가가 어려웠음. **Room으로 전면 이전 + 즐겨찾기 테이블 신설**로 한 번에 정리.
+
+design doc: `docs/channel-filters-favorites-2026-05-06.md` (Status: APPROVED)
+
+### 결정사항
+
+| 항목 | 값 |
+|---|---|
+| DB | Room 2.6.1, `subfeed.db`, version 1 |
+| 테이블 | `channels` (id PK, windowDays, maxCount, sortOrder), `favorites` (videoId PK + 메타) |
+| import 형식 | **JSON only** (XML 직접 import 제거). Takeout XML은 converter로 JSON 변환 후 사용 |
+| import 동작 | channels wipe + insert / favorites 보존 |
+| 기본값 | `windowDays=1`, `maxCount=15` |
+| 즐겨찾기 모델 | videoId PK + title/썸네일/channelName/uploadedAt 메타 같이 저장 (RSS에서 사라져도 즐겨찾기 탭에서 표시) |
+| 즐겨찾기 동기화 | 로컬만 (Firestore X) — 향후 별도 PR |
+| UI | FeedScreen 상단 `TabRow` 2개 탭(오늘의 구독영상 / 즐겨찾기) + 영상 row 우측 ⭐ 토글 |
+| 채널 편집 | Settings → "채널 편집" 라우트 → 행별 편집 다이얼로그 / 삭제 |
+| Shorts 제외 | 이번 범위 제외 |
+
+### 의존성 변경
+
+`gradle/libs.versions.toml`:
+```toml
+[versions]
+room = "2.6.1"
+kotlinxSerialization = "1.7.3"
+
+[libraries]
+room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+room-ktx     = { group = "androidx.room", name = "room-ktx",     version.ref = "room" }
+room-compiler= { group = "androidx.room", name = "room-compiler",version.ref = "room" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+
+[plugins]
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+```
+
+`app/build.gradle.kts`:
+- plugin `kotlin-serialization` 추가
+- `implementation(libs.room.runtime)` / `implementation(libs.room.ktx)` / `ksp(libs.room.compiler)`
+- `implementation(libs.kotlinx.serialization.json)`
+
+### 신규 / 수정 파일
+
+```
+app/src/main/java/com/minseo41/subfeed/
+├── data/
+│   ├── db/                         # 신규 패키지
+│   │   ├── ChannelEntity.kt
+│   │   ├── FavoriteEntity.kt
+│   │   ├── ChannelDao.kt
+│   │   ├── FavoriteDao.kt
+│   │   └── SubFeedDatabase.kt
+│   ├── FavoriteRepo.kt             # 신규
+│   └── SubscriptionRepo.kt         # SharedPreferences 제거, Dao 사용, importFromJson, 채널별 windowDays/maxCount 적용
+├── di/
+│   └── DatabaseModule.kt           # 신규 — Room + Dao provide
+├── model/
+│   └── SubscribedChannel.kt        # windowDays/maxCount 필드 + DEFAULT_* + rssUrlFromId
+├── ui/
+│   ├── FeedViewModel.kt            # FeedTab + favorites StateFlow + toggleFavorite
+│   ├── FeedScreen.kt               # 상단 TabRow + ⭐ 버튼 + 즐겨찾기 탭 분기
+│   ├── SettingsViewModel.kt        # importFromJson, channelCount StateFlow
+│   ├── SettingsScreen.kt           # JSON import 버튼 + 채널 편집 진입점
+│   └── settings/                   # 신규 패키지
+│       ├── ChannelEditScreen.kt
+│       └── ChannelEditViewModel.kt
+└── MainActivity.kt                 # settings/channels 라우트 등록
+
+scripts/
+└── takeout-xml-to-json.py          # 신규 — Takeout subscriptions.xml → SubFeed channels.json
+
+docs/
+├── channel-filters-favorites-2026-05-06.md  # 신규 design doc (APPROVED)
+└── youtube-subscriptions-import-2026-05-05.md  # JSON 스키마 + converter 사용법으로 갱신
+```
+
+### 핵심 설계 포인트
+
+- **`SubscribedChannel.url` 필드는 호환성 위해 유지하지만 JSON import에는 받지 않음**. 모든 RSS URL은 `rssUrlFromId(id)` 헬퍼로 복원.
+- **`fetchTodayVideos`가 채널별 cutoff 적용**: `today.minusDays((windowDays-1).coerceAtLeast(0))` 부터 today까지. 그 후 `take(maxCount)`. RSS 자체 15개 한도 위에서 동작.
+- **JSON import는 `channelDao.deleteAll()` → `insertAll`**. favorites 테이블은 손대지 않음.
+- **즐겨찾기 토글은 FavoriteRepo 단일 진입점** — `exists` 체크 후 insert/delete 분기. UI는 `observeFavoriteIds()` Flow를 구독해 ⭐ 상태 자동 갱신.
+- **Room migration 없음** — 이번이 첫 도입이라 version=1, fallback 정책 안 씀. 다음 schema 변경 시 migration 작성 예정.
+
+### Converter 사용 예시
+
+```bash
+# Takeout subscriptions.xml → SubFeed channels.json
+python scripts/takeout-xml-to-json.py subscriptions.xml -o channels.json
+
+# default windowDays/maxCount 명시
+python scripts/takeout-xml-to-json.py subscriptions.xml \
+    --window-days 3 --max-count 10 -o channels.json
+```
+
+CSV/OPML/JSON Takeout 변형들은 docs/youtube-subscriptions-import-2026-05-05.md 의 B.3 섹션에 별도 Python 스니펫.
+
+### 빌드/단말 검증
+
+- `./gradlew assembleDebug` — BUILD SUCCESSFUL (1m 38s, KSP Room generation 포함)
+- 폴드(R3CT70FY0ZP) 설치 — `Performing Streamed Install / Success`
+- 실측 항목(이후 단말에서 확인): JSON import / TabRow 전환 / ⭐ 토글 / 즐겨찾기 탭 표시 / 채널 편집 다이얼로그
+
+### 알려진 follow-up
+
+- 즐겨찾기 Firestore 동기화 (별도 PR)
+- Shorts 제외 필터 (별도 PR — InnerTube 호출 비용 검토 필요)
+- Room schema 변화 시 migration 작성
+
+---
+
 ## 관련 문서 (이 시점 기준 문서 맵)
 
 | 문서 | 용도 |
 |---|---|
 | `docs/design.md` | SubFeed 전체 design doc — 첫 라운드(MVP), Status: APPROVED |
 | `docs/player-screen-renewal-2026-05-05.md` | 두 번째 design doc — PlayerScreen 전면 리뉴얼, Status: APPROVED |
+| `docs/channel-filters-favorites-2026-05-06.md` | 세 번째 design doc — 채널 필터 + 즐겨찾기 + Room DB, Status: APPROVED |
 | `docs/development-log.md` (이 문서) | 시간순 구현 / 디버깅 / 단말 검증 로그 |
 | `docs/firebase-setup-2026-05-05.md` | Firebase Console 셋업 step-by-step (재현 가이드) |
-| `docs/youtube-subscriptions-import-2026-05-05.md` | Google Takeout으로 구독 채널 일괄 import (XML 변환 포함) |
+| `docs/youtube-subscriptions-import-2026-05-05.md` | Google Takeout → JSON converter + import 가이드 |
 
 ---
 
