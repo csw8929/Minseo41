@@ -87,6 +87,9 @@ fun PlayerScreen(
                     .filter { it > 0 }
                 viewModel.updateAvailableQualities(heights)
             }
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                viewModel.updateCurrentVideoHeight(videoSize.height)
+            }
         }
         exoPlayer.addListener(listener)
         onDispose {
@@ -260,7 +263,11 @@ fun PlayerScreen(
                 Column(modifier = Modifier.fillMaxSize()) {
                     PlayerTopBar(
                         title = "재생 중",
-                        qualityLabel = if (uiState.selectedMaxHeight <= 0) "자동" else "${uiState.selectedMaxHeight}p",
+                        qualityLabel = when {
+                            uiState.selectedMaxHeight > 0 -> "${uiState.selectedMaxHeight}p"
+                            uiState.currentVideoHeight > 0 -> "자동 ${uiState.currentVideoHeight}p"
+                            else -> "자동"
+                        },
                         qualityEnabled = uiState.isHlsStream,
                         captionEnabled = uiState.selectedCaptionLanguage != null,
                         backgroundPlaybackEnabled = uiState.backgroundPlaybackEnabled,
@@ -324,7 +331,13 @@ fun PlayerScreen(
         if (qualityMenuOpen) {
             QualityMenu(
                 options = uiState.availableQualityHeights.map { h ->
-                    QualityOption(if (h == 0) "자동" else "${h}p", h)
+                    val label = when {
+                        h == 0 && uiState.currentVideoHeight > 0 ->
+                            "자동 (현재 ${uiState.currentVideoHeight}p)"
+                        h == 0 -> "자동"
+                        else -> "${h}p"
+                    }
+                    QualityOption(label, h)
                 },
                 selectedMaxHeight = uiState.selectedMaxHeight,
                 onSelect = {

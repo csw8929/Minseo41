@@ -35,6 +35,7 @@ data class PlayerUiState(
     val availableQualityHeights: List<Int> = listOf(0), // 0 = 자동
     val isHlsStream: Boolean = false,
     val selectedMaxHeight: Int = 0,
+    val currentVideoHeight: Int = 0, // ExoPlayer가 현재 실제 디코딩 중인 video height (자동 모드에서 채택된 해상도 확인용)
     val isFullscreen: Boolean = false,
     val isInPipMode: Boolean = false,
     val backgroundPlaybackEnabled: Boolean = true,
@@ -170,6 +171,11 @@ class PlayerViewModel @Inject constructor(
 
     fun selectQuality(maxHeight: Int) {
         _uiState.update { it.copy(selectedMaxHeight = maxHeight) }
+    }
+
+    fun updateCurrentVideoHeight(height: Int) {
+        if (height <= 0) return
+        _uiState.update { it.copy(currentVideoHeight = height) }
     }
 
     fun setFullscreen(enabled: Boolean) {
