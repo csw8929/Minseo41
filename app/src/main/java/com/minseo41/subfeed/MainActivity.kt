@@ -10,6 +10,7 @@ import androidx.navigation.compose.rememberNavController
 import com.minseo41.subfeed.ui.FeedScreen
 import com.minseo41.subfeed.ui.PlayerScreen
 import com.minseo41.subfeed.ui.SettingsScreen
+import com.minseo41.subfeed.ui.settings.ChannelEditScreen
 import com.minseo41.subfeed.ui.theme.SubFeedTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -37,7 +38,13 @@ class MainActivity : ComponentActivity() {
                         PlayerScreen(videoId = videoId, onBack = { navController.popBackStack() })
                     }
                     composable("settings") {
-                        SettingsScreen(onBack = { navController.popBackStack() })
+                        SettingsScreen(
+                            onBack = { navController.popBackStack() },
+                            onChannelEdit = { navController.navigate("settings/channels") },
+                        )
+                    }
+                    composable("settings/channels") {
+                        ChannelEditScreen(onBack = { navController.popBackStack() })
                     }
                 }
             }

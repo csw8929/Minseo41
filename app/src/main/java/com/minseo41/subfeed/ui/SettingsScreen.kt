@@ -18,18 +18,19 @@ import androidx.hilt.navigation.compose.hiltViewModel
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onChannelEdit: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val channelCount by viewModel.channelCount.collectAsState()
     val context = LocalContext.current
-    var channelUrlInput by remember { mutableStateOf("") }
 
-    val xmlLauncher = rememberLauncherForActivityResult(
+    val jsonLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             context.contentResolver.openInputStream(it)?.use { stream ->
-                viewModel.importFromTakeoutXml(stream)
+                viewModel.importFromJson(stream)
             }
         }
     }
@@ -93,42 +94,35 @@ fun SettingsScreen(
 
             Text("구독 채널 import", style = MaterialTheme.typography.titleMedium)
 
-            Button(
-                onClick = { xmlLauncher.launch(arrayOf("text/xml", "application/xml", "*/*")) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("YouTube Takeout XML 불러오기")
-            }
-
-            HorizontalDivider()
-
-            Text("채널 URL 직접 추가", style = MaterialTheme.typography.titleMedium)
-
-            OutlinedTextField(
-                value = channelUrlInput,
-                onValueChange = { channelUrlInput = it },
-                label = { Text("https://www.youtube.com/channel/...") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
+            Text(
+                "JSON 파일을 선택하면 기존 채널 목록을 모두 교체합니다 (즐겨찾기는 유지).",
+                style = MaterialTheme.typography.bodySmall,
             )
-
             Button(
                 onClick = {
-                    viewModel.addChannelByUrl(channelUrlInput.trim())
-                    channelUrlInput = ""
+                    jsonLauncher.launch(arrayOf("application/json", "*/*"))
                 },
-                enabled = channelUrlInput.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("추가")
+                Text("JSON 파일 import")
             }
 
             HorizontalDivider()
 
+            Text("채널 관리", style = MaterialTheme.typography.titleMedium)
+
             Text(
-                "구독 채널: ${uiState.channelCount}개",
+                "구독 채널: ${channelCount}개",
                 style = MaterialTheme.typography.bodyMedium,
             )
+
+            Button(
+                onClick = onChannelEdit,
+                enabled = channelCount > 0,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("채널 편집")
+            }
 
             if (uiState.message != null) {
                 Text(
