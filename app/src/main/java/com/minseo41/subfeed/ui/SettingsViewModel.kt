@@ -6,17 +6,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.AuthRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
-import com.minseo41.subfeed.model.SubscribedChannel
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.InputStream
 import javax.inject.Inject
 
 data class SettingsUiState(
-    val channelCount: Int = 0,
     val message: String? = null,
     val signedInEmail: String? = null,
 )
@@ -30,8 +31,11 @@ class SettingsViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState
 
+    val channelCount: StateFlow<Int> = subscriptionRepo.observeChannels()
+        .map { it.size }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
     init {
-        refresh()
         viewModelScope.launch {
             authRepo.currentUser.collect { user ->
                 _uiState.update { it.copy(signedInEmail = user?.email) }
@@ -39,37 +43,17 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun importFromTakeoutXml(stream: InputStream) {
-        val channels = runCatching { subscriptionRepo.parseYoutubeTakeoutXml(stream) }
-            .getOrDefault(emptyList())
-        if (channels.isEmpty()) {
-            _uiState.update { it.copy(message = "채널을 찾지 못했습니다. XML 파일을 확인해주세요.") }
-            return
+    fun importFromJson(stream: InputStream) {
+        viewModelScope.launch {
+            runCatching { subscriptionRepo.importFromJson(stream) }
+                .onSuccess { count ->
+                    _uiState.update { it.copy(message = "${count}개 채널 import 됨") }
+                }
+                .onFailure { e ->
+                    Log.e(TAG, "JSON import 실패", e)
+                    _uiState.update { it.copy(message = "JSON import 실패: ${e.message}") }
+                }
         }
-        val existing = subscriptionRepo.loadChannels().toMutableList()
-        val newIds = existing.map { it.id }.toSet()
-        val added = channels.filter { it.id !in newIds }
-        subscriptionRepo.saveChannels(existing + added)
-        _uiState.update {
-            it.copy(
-                channelCount = existing.size + added.size,
-                message = "${added.size}개 채널 추가됨",
-            )
-        }
-    }
-
-    fun addChannelByUrl(url: String) {
-        if (url.isBlank()) return
-        val id = url.substringAfterLast("/").substringBefore("?")
-        val channel = SubscribedChannel(id = id, name = id, url = url)
-        val existing = subscriptionRepo.loadChannels().toMutableList()
-        if (existing.any { it.id == id }) {
-            _uiState.update { it.copy(message = "이미 추가된 채널입니다") }
-            return
-        }
-        existing.add(channel)
-        subscriptionRepo.saveChannels(existing)
-        _uiState.update { it.copy(channelCount = existing.size, message = "채널 추가됨") }
     }
 
     fun signInIntent(): Intent {
@@ -102,9 +86,5 @@ class SettingsViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "SubFeedSettingsVM"
-    }
-
-    private fun refresh() {
-        _uiState.update { it.copy(channelCount = subscriptionRepo.loadChannels().size) }
     }
 }

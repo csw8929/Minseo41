@@ -7,12 +7,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -20,6 +23,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.minseo41.subfeed.model.VideoItem
 import java.time.Duration
+
+private val FavoriteYellow = Color(0xFFFFD700)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,20 +34,39 @@ fun FeedScreen(
     viewModel: FeedViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val selectedTab by viewModel.selectedTab.collectAsState()
+    val favorites by viewModel.favorites.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("오늘의 구독 영상") },
-                actions = {
-                    IconButton(onClick = { viewModel.loadTodayFeed() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "새로고침")
+            Column {
+                TopAppBar(
+                    title = { Text("SubFeed") },
+                    actions = {
+                        if (selectedTab == FeedTab.Today) {
+                            IconButton(onClick = { viewModel.loadTodayFeed() }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "새로고침")
+                            }
+                        }
+                        IconButton(onClick = onSettingsClick) {
+                            Icon(Icons.Default.Settings, contentDescription = "설정")
+                        }
                     }
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(Icons.Default.Settings, contentDescription = "설정")
-                    }
+                )
+                TabRow(selectedTabIndex = selectedTab.ordinal) {
+                    Tab(
+                        selected = selectedTab == FeedTab.Today,
+                        onClick = { viewModel.selectTab(FeedTab.Today) },
+                        text = { Text("구독영상") },
+                    )
+                    Tab(
+                        selected = selectedTab == FeedTab.Favorites,
+                        onClick = { viewModel.selectTab(FeedTab.Favorites) },
+                        text = { Text("즐겨찾기") },
+                    )
                 }
-            )
+            }
         }
     ) { padding ->
         Box(
@@ -50,35 +74,103 @@ fun FeedScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when (val state = uiState) {
-                is FeedUiState.Loading -> CircularProgressIndicator(Modifier.align(Alignment.Center))
-                is FeedUiState.Error -> Column(
-                    Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(state.message, style = MaterialTheme.typography.bodyLarge)
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { viewModel.loadTodayFeed() }) { Text("다시 시도") }
-                }
-                is FeedUiState.Success -> LazyColumn {
-                    items(state.videos, key = { it.id }) { video ->
-                        VideoRow(video = video, onClick = { onVideoClick(video.id) })
-                        HorizontalDivider()
-                    }
-                }
+            when (selectedTab) {
+                FeedTab.Today -> TodayContent(
+                    state = uiState,
+                    favoriteIds = favoriteIds,
+                    onVideoClick = onVideoClick,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                    onRetry = { viewModel.loadTodayFeed() },
+                )
+                FeedTab.Favorites -> FavoritesContent(
+                    favorites = favorites,
+                    onVideoClick = onVideoClick,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun VideoRow(video: VideoItem, onClick: () -> Unit) {
+private fun TodayContent(
+    state: FeedUiState,
+    favoriteIds: Set<String>,
+    onVideoClick: (String) -> Unit,
+    onToggleFavorite: (VideoItem) -> Unit,
+    onRetry: () -> Unit,
+) {
+    when (state) {
+        is FeedUiState.Loading -> Box(Modifier.fillMaxSize()) {
+            CircularProgressIndicator(Modifier.align(Alignment.Center))
+        }
+        is FeedUiState.Error -> Column(
+            Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(state.message, style = MaterialTheme.typography.bodyLarge)
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = onRetry) { Text("다시 시도") }
+        }
+        is FeedUiState.Success -> LazyColumn {
+            items(state.videos, key = { it.id }) { video ->
+                VideoRow(
+                    video = video,
+                    isFavorite = video.id in favoriteIds,
+                    onClick = { onVideoClick(video.id) },
+                    onToggleFavorite = { onToggleFavorite(video) },
+                )
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun FavoritesContent(
+    favorites: List<VideoItem>,
+    onVideoClick: (String) -> Unit,
+    onToggleFavorite: (VideoItem) -> Unit,
+) {
+    if (favorites.isEmpty()) {
+        Box(Modifier.fillMaxSize()) {
+            Text(
+                "즐겨찾기에 추가된 영상이 없습니다.\n영상 우측의 ☆ 을 눌러 추가하세요.",
+                modifier = Modifier.align(Alignment.Center),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    } else {
+        LazyColumn {
+            items(favorites, key = { it.id }) { video ->
+                VideoRow(
+                    video = video,
+                    isFavorite = true,
+                    onClick = { onVideoClick(video.id) },
+                    onToggleFavorite = { onToggleFavorite(video) },
+                )
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoRow(
+    video: VideoItem,
+    isFavorite: Boolean,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(12.dp),
+            .padding(start = 12.dp, top = 12.dp, bottom = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         AsyncImage(
             model = video.thumbnailUrl,
@@ -101,10 +193,19 @@ private fun VideoRow(video: VideoItem, onClick: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Text(
-                text = formatDuration(video.durationSeconds),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            if (video.durationSeconds > 0L) {
+                Text(
+                    text = formatDuration(video.durationSeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        IconButton(onClick = onToggleFavorite) {
+            Icon(
+                imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                contentDescription = if (isFavorite) "즐겨찾기 해제" else "즐겨찾기 추가",
+                tint = if (isFavorite) FavoriteYellow else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

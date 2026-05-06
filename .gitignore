@@ -17,5 +17,15 @@ app/build
 app/google-services.json
 local.properties
 
+# 개인 데이터 (Takeout/JSON import 결과물 — 각자 생성)
+/channels*.json
+/subscriptions.xml
+/subscriptions.csv
+/subscriptions.opml
+/subscriptions.json
+
+# Claude Code 로컬 설정
+.claude/
+
 # Gradle wrapper jar는 포함 (wrapper properties만으로 빌드 불가)
 !gradle/wrapper/gradle-wrapper.jar
