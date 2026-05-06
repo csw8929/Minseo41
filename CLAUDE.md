@@ -28,6 +28,27 @@ adb -s R54Y1003KXN install app/build/outputs/apk/debug/app-debug.apk
 
 테스트 단말 serial은 상위 workspace CLAUDE.md 참고.
 
+## 화면 캡처
+
+### 폴드 (R3CT70FY0ZP) — 메인 디스플레이 캡처
+
+폴드는 다중 디스플레이라 `screencap`에 display ID를 명시해야 펼친 메인 화면이 캡처됨. 안 그러면 커버 디스플레이가 잡힐 수 있음.
+
+```bash
+# 메인(펼친) 디스플레이 ID
+adb -s R3CT70FY0ZP shell screencap -d 4630946213010294403 -p /sdcard/screen.png
+adb -s R3CT70FY0ZP pull /sdcard/screen.png D:/workspace/png/screen.png
+```
+
+스크린샷은 항상 `D:/workspace/png/screen.png` 로 pull 해서 사용 (사용자 표준 경로). 파일을 보려면 Read 툴로 그 경로를 읽으면 이미지가 표시됨.
+
+### 다른 단말 (단일 디스플레이) — `-d` 생략
+
+```bash
+adb -s <serial> shell screencap -p /sdcard/screen.png
+adb -s <serial> pull /sdcard/screen.png D:/workspace/png/screen.png
+```
+
 ## 아키텍처
 
 MVVM + Hilt DI. 단일 Activity (`MainActivity`) + Compose Navigation (3개 route).
