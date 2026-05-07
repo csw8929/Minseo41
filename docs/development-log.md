@@ -805,6 +805,82 @@ CSV/OPML/JSON Takeout 변형들은 docs/youtube-subscriptions-import-2026-05-05.
 
 ---
 
+## 비로그인 시청위치 로컬 저장 + Firestore-우선 hybrid 조회 (2026-05-07)
+
+### 배경
+
+`SyncRepo`가 Firestore single-backend라 비로그인 상태에서는 시청 위치가 어디에도 저장되지 않았다. 또한 Sign-In 실패가 잦은 환경(다중 PC SHA-1 미등록 등)에서 그 동안 시청한 모든 영상의 위치가 통째로 누락되는 회귀가 발생.
+
+design doc: `docs/offline-position-sync-2026-05-07.md` (Status: APPROVED)
+
+### 결정사항
+
+| 항목 | 값 | 근거 |
+|---|---|---|
+| write 전략 | **항상 local + 로그인 시 Firestore 추가** (write-through) | Firestore 만 있을 때 휘발 케이스 차단 |
+| read 전략 | **로그인 → Firestore 1회 시도 → 실패/없음 시 local fallback / 비로그인 → local only** | 사용자 요청 그대로 |
+| 충돌 정책 | **더 큰 `positionMs` 우선** (Firestore / local 각각) | 기존 정책 유지 |
+| 로그인 transition (null→uid) | **local→Firestore 일괄 push** (더 큰 positionMs 우선) | 비로그인 시청 기록의 cross-device 합류 |
+| 로그아웃 시 local | **보존** | 같은 단말 이어보기 흐름 유지 |
+| Local row cap | **5000 LRU** (`updatedAt` 오래된 순) | DB 부담 방지 + 일반 사용자 평생 시청 영상 ≪ 5000 |
+| Firestore read 실패 정의 | **1회 시도 후 즉시 local fallback** (별도 timeout/retry 없음) | 단순 / 실효 충분 |
+| Migration | **v1→v2 ADD TABLE only** (`channels`/`favorites` 보존) | |
+
+### 의존성 변경
+
+없음 (Room / Firebase 기존 의존성 그대로).
+
+### 신규 / 수정 파일
+
+```
+app/src/main/java/com/minseo41/subfeed/
+├── data/
+│   ├── db/
+│   │   ├── WatchPositionEntity.kt   # 신규 — videoId PK + positionMs + updatedAt
+│   │   ├── WatchPositionDao.kt      # 신규 — get/getAll/upsert/delete/count/pruneOldest
+│   │   └── SubFeedDatabase.kt       # 수정 — entity 추가, version=2
+│   └── SyncRepo.kt                  # 수정 — 전면 갱신
+├── di/
+│   └── DatabaseModule.kt            # 수정 — MIGRATION_1_2, provideWatchPositionDao
+docs/
+└── offline-position-sync-2026-05-07.md  # 신규 design doc (APPROVED)
+```
+
+호출부 (`PlayerViewModel.loadVideo`, `onPositionChanged`, `savePositionNow`) 시그니처 변경 없음.
+
+### 핵심 동작 (구현 후)
+
+- **`SyncRepo.savePosition`**: 로컬 upsert (positionMs 더 클 때만) → `pruneIfOver()` (count > 5000 시 oldest 삭제) → 로그인 시 Firestore 갱신.
+- **`SyncRepo.getPosition`**: 로그인 시 Firestore 1회 시도 → 성공 doc 있으면 local 캐시 갱신 후 반환. 실패/없음/비로그인 → local fallback.
+- **`SyncRepo.init`**: `auth.addAuthStateListener` 등록. `lastUid` 보관해서 null→non-null 전이 시점에만 `detachedScope.launch { syncLocalToFirestoreOnSignIn() }`.
+- **`syncLocalToFirestoreOnSignIn`**: `getAll()` → 각 row 마다 Firestore fetch → `local.positionMs > remote.positionMs` 인 것만 set. 직렬 처리 (Firestore quota 고려).
+
+### 빌드/단말 설치
+
+- `./gradlew assembleDebug` — `BUILD SUCCESSFUL in 15s` (Room schema v2 KSP 재생성 포함)
+- `adb -s R3CX705W62D install -r app-debug APK` — `Performing Streamed Install / Success`
+
+### 단말 검증 (계속 진행 중)
+
+검증 시나리오 — 단말(R3CX705W62D, 플립):
+- [ ] 비로그인으로 영상 30초 시청 → 뒤로 → 재진입 → ResumeBanner 노출
+- [ ] 비로그인 시청 후 Sign-In → logcat `SubFeedSync: syncLocalToFirestoreOnSignIn done: pushed=N` 확인 → Firestore 콘솔에 doc 생성
+- [ ] 로그인 + cross-device (다른 단말) 진입 시 같은 위치 (regression 없음)
+- [ ] 비행기모드 → 영상 진입 시 local fallback 동작
+- [ ] 로그아웃 후 같은 영상 재진입 → ResumeBanner 정상
+
+logcat 명령:
+```bash
+adb -s R3CX705W62D logcat -s SubFeedSync:V SubFeedAuth:V SubFeedPlayerVM:V Auth:W AndroidRuntime:E '*:S'
+```
+
+### 알려진 follow-up
+
+- 단말 검증 완료 후 결과를 위 체크리스트에 기록
+- 한 번에 다수 row push 시 직렬 처리 — 1000+ row 쌓이면 분 단위 소요 가능. 필요 시 `awaitAll()` 병렬화 검토 (Firestore quota 모니터링 필요)
+
+---
+
 ## 관련 문서 (이 시점 기준 문서 맵)
 
 | 문서 | 용도 |
@@ -812,6 +888,7 @@ CSV/OPML/JSON Takeout 변형들은 docs/youtube-subscriptions-import-2026-05-05.
 | `docs/design.md` | SubFeed 전체 design doc — 첫 라운드(MVP), Status: APPROVED |
 | `docs/player-screen-renewal-2026-05-05.md` | 두 번째 design doc — PlayerScreen 전면 리뉴얼, Status: APPROVED |
 | `docs/channel-filters-favorites-2026-05-06.md` | 세 번째 design doc — 채널 필터 + 즐겨찾기 + Room DB, Status: APPROVED |
+| `docs/offline-position-sync-2026-05-07.md` | 네 번째 design doc — 비로그인 로컬 저장 + Firestore-우선 hybrid, Status: APPROVED |
 | `docs/development-log.md` (이 문서) | 시간순 구현 / 디버깅 / 단말 검증 로그 |
 | `docs/firebase-setup-2026-05-05.md` | Firebase Console 셋업 step-by-step (재현 가이드) |
 | `docs/youtube-subscriptions-import-2026-05-05.md` | Google Takeout → JSON converter + import 가이드 |
@@ -820,7 +897,7 @@ CSV/OPML/JSON Takeout 변형들은 docs/youtube-subscriptions-import-2026-05-05.
 
 ## 향후 정리 항목 (요약)
 
-- **Step 9 — MediaSessionService에 Player 이전**: 백그라운드 재생 옵션 토글이 실제 동작하도록. 현재는 prefs만 갱신, service 자체는 빈 골격.
+- **백그라운드 재생 옵션 토글**: 현재 SharedPreferences `"player"/"backgroundPlayback"` 만 갱신, 서비스 동작에는 미반영 (player는 항상 service에서 살아있음). prefs 값을 onTaskRemoved/onPause 등에서 분기하도록 연결 필요. (Step 9의 player 이전 자체는 완료.)
 - **GoogleSignIn → Credential Manager**: Android 권장 API로 마이그레이션. `play-services-auth` 21.2의 GoogleSignIn은 deprecated 경고 5건 출력 중. 동작은 OK.
 - **detached scope 잔여 cancel**: `Application` scope 또는 별도 Hilt-injected `ApplicationScope`로 이전. 현재 첫 commit은 성공하나 가끔 후속 commit이 cancel되는 race 잔존.
 - **자막/화질/PIP/폴드↔탭 cross-device 실측**: 코드 경로 있음. 실 단말 검증 미완.
