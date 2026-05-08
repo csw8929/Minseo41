@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -146,13 +147,22 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
 
-            Text("back 키 동작", style = MaterialTheme.typography.bodyMedium)
-            BackActionRow(
-                selected = uiState.backAction,
-                onSelect = { viewModel.setBackAction(it) },
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    "기본 전체화면",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = uiState.defaultFullscreen,
+                    onCheckedChange = { viewModel.setDefaultFullscreen(it) },
+                )
+            }
             Text(
-                "홈 키·폴드 닫기는 항상 백그라운드 재생 유지. 이 옵션은 back 키만 적용됩니다.",
+                "영상 진입 시 자동으로 전체화면(가로) 모드로 시작합니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -184,28 +194,32 @@ fun SettingsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QualityDefaultRow(selected: Int, onSelect: (Int) -> Unit) {
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PlayerPrefs.QUALITY_OPTIONS.forEach { height ->
             val label = if (height == 0) "자동" else "${height}p"
             FilterChip(
                 selected = selected == height,
                 onClick = { onSelect(height) },
-                label = { Text(label) },
+                label = { Text(label, maxLines = 1, overflow = TextOverflow.Visible) },
             )
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CaptionScaleRow(selected: Float, onSelect: (Float) -> Unit) {
-    Row(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         PlayerPrefs.CAPTION_SCALE_OPTIONS.forEach { scale ->
             FilterChip(
@@ -217,21 +231,3 @@ private fun CaptionScaleRow(selected: Float, onSelect: (Float) -> Unit) {
     }
 }
 
-@Composable
-private fun BackActionRow(selected: String, onSelect: (String) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        FilterChip(
-            selected = selected == PlayerPrefs.BACK_ACTION_STOP,
-            onClick = { onSelect(PlayerPrefs.BACK_ACTION_STOP) },
-            label = { Text("정지") },
-        )
-        FilterChip(
-            selected = selected == PlayerPrefs.BACK_ACTION_PIP,
-            onClick = { onSelect(PlayerPrefs.BACK_ACTION_PIP) },
-            label = { Text("PIP 진입") },
-        )
-    }
-}

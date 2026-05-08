@@ -25,7 +25,7 @@ data class SettingsUiState(
     val defaultMaxHeight: Int = 0,
     val captionScale: Float = 1.0f,
     val orientationLocked: Boolean = false,
-    val backAction: String = PlayerPrefs.BACK_ACTION_STOP,
+    val defaultFullscreen: Boolean = false,
 )
 
 @HiltViewModel
@@ -50,8 +50,7 @@ class SettingsViewModel @Inject constructor(
                 defaultMaxHeight = playerPrefs.getInt(PlayerPrefs.KEY_DEFAULT_MAX_HEIGHT, 0),
                 captionScale = playerPrefs.getFloat(PlayerPrefs.KEY_CAPTION_SCALE, 1.0f),
                 orientationLocked = playerPrefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
-                backAction = playerPrefs.getString(PlayerPrefs.KEY_BACK_ACTION, PlayerPrefs.BACK_ACTION_STOP)
-                    ?: PlayerPrefs.BACK_ACTION_STOP,
+                defaultFullscreen = playerPrefs.getBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, false),
             )
         }
         viewModelScope.launch {
@@ -76,9 +75,9 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(orientationLocked = locked) }
     }
 
-    fun setBackAction(action: String) {
-        playerPrefs.edit().putString(PlayerPrefs.KEY_BACK_ACTION, action).apply()
-        _uiState.update { it.copy(backAction = action) }
+    fun setDefaultFullscreen(enabled: Boolean) {
+        playerPrefs.edit().putBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, enabled).apply()
+        _uiState.update { it.copy(defaultFullscreen = enabled) }
     }
 
     fun importFromJson(stream: InputStream) {

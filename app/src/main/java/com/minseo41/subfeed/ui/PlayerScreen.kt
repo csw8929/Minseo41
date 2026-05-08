@@ -29,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
@@ -43,7 +44,6 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import com.minseo41.subfeed.service.SubFeedMediaSessionService
 import com.minseo41.subfeed.ui.player.CaptionMenu
 import com.minseo41.subfeed.ui.player.DoubleTapSkipOverlay
@@ -200,13 +200,13 @@ fun PlayerScreen(
         }
     }
 
-    // streamInfo / captionSrtUri 변경 시 MediaItem 재구성
-    LaunchedEffect(mediaController, uiState.streamInfo, uiState.captionSrtUri) {
+    // streamInfo 변경 시에만 MediaItem 재구성. 자막은 Compose 오버레이에서 직접 렌더링하므로
+    // captionSrtUri 같은 키가 사라져 자막 toggle 시 영상이 검정으로 깜빡이지 않는다.
+    LaunchedEffect(mediaController, uiState.streamInfo) {
         val controller = mediaController ?: return@LaunchedEffect
         val info = uiState.streamInfo ?: return@LaunchedEffect
         val isNewVideo = videoId != lastPreparedVideoId
         // 새 영상 진입 시: controller.currentPosition은 이전 영상 위치라 무시. saved 위치만 사용.
-        // 같은 영상 안에서 자막 변경 시: controller.currentPosition (현재 재생 위치) 보존.
         val savedPos = if (isNewVideo) {
             uiState.resumePositionMs
         } else {
@@ -226,17 +226,6 @@ fun PlayerScreen(
             else -> MediaItem.Builder()
                 .setMediaId(videoId)
                 .setUri(raw)
-        }
-        uiState.captionSrtUri?.let { uri ->
-            builder.setSubtitleConfigurations(
-                listOf(
-                    MediaItem.SubtitleConfiguration.Builder(uri)
-                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
-                        .setLanguage(uiState.selectedCaptionLanguage ?: "und")
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                )
-            )
         }
         // setMediaItem 후 seekTo 패턴은 seekbar가 0으로 갔다가 saved로 점프하는 깜빡임을 만든다.
         // startPositionMs를 직접 넘겨 처음부터 그 위치에서 prepare하도록 한다.
@@ -315,8 +304,18 @@ fun PlayerScreen(
         if (isInPip) controlsVisible = false
     }
 
-    BackHandler(enabled = uiState.isFullscreen) {
-        viewModel.setFullscreen(false)
+    // 시스템 back key — 풀스크린이면 풀스크린 해제, 그 외엔 일시정지 + 리스트로.
+    BackHandler {
+        if (uiState.isFullscreen) {
+            viewModel.setFullscreen(false)
+        } else {
+            mediaController?.let { ctrl ->
+                viewModel.savePositionNow(ctrl.currentPosition)
+                runCatching { ctrl.pause() }
+            }
+            isExiting = true
+            onBack()
+        }
     }
 
     // 영상 재생 중일 때만 화면 꺼짐 방지 (일시정지/이탈 시 자동 해제).
@@ -354,16 +353,43 @@ fun PlayerScreen(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = false
+                        subtitleView?.visibility = android.view.View.GONE
                     }
                 },
                 update = { view ->
                     view.player = mediaController
-                    view.subtitleView?.setFractionalTextSize(
-                        SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * uiState.selectedCaptionScale
-                    )
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+
+        // 자막 오버레이 — ExoPlayer 의 SubtitleView 대신 Compose 에서 직접 렌더링.
+        // currentPositionMs (200ms 폴링) 로 active cue 찾아 Text 표시. toggle/언어 변경이
+        // MediaItem 재준비 없이 즉시 반영되고, 영상 검정 깜빡임도 사라짐.
+        val activeCue = if (uiState.captionCues.isEmpty()) null
+            else uiState.captionCues.firstOrNull {
+                currentPositionMs in it.startMs..it.endMs
+            }
+        if (activeCue != null && !uiState.isInPipMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 96.dp, start = 24.dp, end = 24.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Text(
+                    text = activeCue.text,
+                    color = Color.White,
+                    fontSize = (16f * uiState.selectedCaptionScale).sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .background(
+                            Color.Black.copy(alpha = 0.6f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
 
         // 더블탭 핫존 — 컨트롤이 가려질 때만 동작
@@ -406,18 +432,12 @@ fun PlayerScreen(
                         orientationLocked = uiState.orientationLocked,
                         onBackClick = {
                             viewModel.savePositionNow(controller.currentPosition)
-                            when {
-                                uiState.isFullscreen -> viewModel.setFullscreen(false)
-                                playerPrefs.getString(
-                                    PlayerPrefs.KEY_BACK_ACTION,
-                                    PlayerPrefs.BACK_ACTION_STOP,
-                                ) == PlayerPrefs.BACK_ACTION_PIP &&
-                                    tryEnterPip(activity) -> Unit
-                                else -> {
-                                    isExiting = true
-                                    runCatching { controller.pause() }
-                                    onBack()
-                                }
+                            if (uiState.isFullscreen) {
+                                viewModel.setFullscreen(false)
+                            } else {
+                                isExiting = true
+                                runCatching { controller.pause() }
+                                onBack()
                             }
                         },
                         onQualityClick = { qualityMenuOpen = true },
