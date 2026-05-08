@@ -191,7 +191,9 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun toggleOrientationLocked() {
-        _uiState.update { it.copy(orientationLocked = !it.orientationLocked) }
+        val newValue = !_uiState.value.orientationLocked
+        prefs.edit().putBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, newValue).apply()
+        _uiState.update { it.copy(orientationLocked = newValue) }
     }
 
     companion object {

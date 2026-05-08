@@ -119,10 +119,19 @@ fun PlayerScreen(
 
     DisposableEffect(mediaController) {
         val controller = mediaController ?: return@DisposableEffect onDispose { }
-        // controller 연결 시 초기 상태 sync
-        isPlayingState = controller.isPlaying
-        currentPositionMs = controller.currentPosition
-        durationMs = controller.duration.coerceAtLeast(0L)
+        // controller 연결 시 초기 상태 sync.
+        // 단, 서비스가 아직 이전 영상의 MediaItem 을 들고 있는 동안엔 그 position 을 UI 에 흘리면
+        // 새 영상 진입 직후 잠시 이전 영상의 seekbar 위치가 보인다. mediaId 일치할 때만 sync.
+        if (controller.currentMediaItem?.mediaId == videoId) {
+            isPlayingState = controller.isPlaying
+            currentPositionMs = controller.currentPosition
+            val d = controller.duration
+            if (d > 0L) durationMs = d
+        } else {
+            isPlayingState = false
+            currentPositionMs = 0L
+            durationMs = 0L
+        }
 
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -152,14 +161,19 @@ fun PlayerScreen(
         }
     }
 
-    // 위치 polling — controller 활성 시에만
+    // 위치 polling — controller 활성 시에만, mediaId 일치할 때만 (이전 영상 position 누설 방지).
+    // duration 은 게이트 밖에서 갱신하되, 0/unknown 으로 덮어쓰지 않는다. clearMediaItems→setMediaItem
+    // reprepare 사이 controller.duration 이 잠깐 0 으로 떨어져서 썸이 11분→0→11분 점프하는 깜빡임 방지.
     LaunchedEffect(mediaController) {
         val controller = mediaController ?: return@LaunchedEffect
         while (true) {
-            delay(500L)
-            if (!isSeeking && System.currentTimeMillis() >= skipPositionPollUntilMs) {
-                currentPositionMs = controller.currentPosition
-                durationMs = controller.duration.coerceAtLeast(0L)
+            delay(200L)
+            if (controller.currentMediaItem?.mediaId == videoId) {
+                val d = controller.duration
+                if (d > 0L) durationMs = d
+                if (!isSeeking && System.currentTimeMillis() >= skipPositionPollUntilMs) {
+                    currentPositionMs = controller.currentPosition
+                }
             }
         }
     }
@@ -264,8 +278,11 @@ fun PlayerScreen(
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
+            // SCREEN_ORIENTATION_LOCKED 는 호출 시점의 현재 orientation 을 잠근다.
+            // 풀스크린 해제 직후엔 아직 landscape 라 LOCKED 를 쓰면 가로 그대로 잠긴다.
+            // 잠금 의도는 작은 플레이어 UI(세로) 를 유지하는 것이므로 PORTRAIT 으로 명시.
             act.requestedOrientation = if (uiState.orientationLocked) {
-                ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
@@ -418,16 +435,21 @@ fun PlayerScreen(
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
                         isFullscreen = uiState.isFullscreen,
-                        // live scrub + 50ms throttle — leading edge에서 즉시 seek, 이후 50ms 간격으로만.
+                        // live scrub + 50ms throttle.
+                        // 드래그 시작은 isSeeking 전이로 감지 — Slider.onValueChange 가 매 픽셀 호출되므로
+                        // start callback 분리는 throttle 리셋을 매 tick 유발해 throttle 자체를 무력화시킨다.
                         onSeek = { ms ->
                             currentPositionMs = ms
+                            if (!isSeeking) {
+                                isSeeking = true
+                                lastSeekAtMs = 0L
+                            }
                             val now = android.os.SystemClock.uptimeMillis()
                             if (now - lastSeekAtMs >= 50L) {
                                 lastSeekAtMs = now
                                 controller.seekTo(ms)
                             }
                         },
-                        onSeekStart = { isSeeking = true; lastSeekAtMs = 0L },
                         onSeekFinished = {
                             // throttle로 빠진 마지막 위치 보정 — 항상 최종 currentPositionMs로 한 번 더 seek.
                             controller.seekTo(currentPositionMs)
