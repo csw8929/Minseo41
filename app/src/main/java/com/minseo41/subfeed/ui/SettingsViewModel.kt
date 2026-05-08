@@ -1,5 +1,6 @@
 package com.minseo41.subfeed.ui
 
+import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -7,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.AuthRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -20,13 +22,20 @@ import javax.inject.Inject
 data class SettingsUiState(
     val message: String? = null,
     val signedInEmail: String? = null,
+    val defaultMaxHeight: Int = 0,
+    val captionScale: Float = 1.0f,
+    val orientationLocked: Boolean = false,
+    val backAction: String = PlayerPrefs.BACK_ACTION_STOP,
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
+    @ApplicationContext context: Context,
     private val subscriptionRepo: SubscriptionRepo,
     private val authRepo: AuthRepo,
 ) : ViewModel() {
+
+    private val playerPrefs = context.getSharedPreferences(PlayerPrefs.NAME, Context.MODE_PRIVATE)
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState
@@ -36,11 +45,40 @@ class SettingsViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     init {
+        _uiState.update {
+            it.copy(
+                defaultMaxHeight = playerPrefs.getInt(PlayerPrefs.KEY_DEFAULT_MAX_HEIGHT, 0),
+                captionScale = playerPrefs.getFloat(PlayerPrefs.KEY_CAPTION_SCALE, 1.0f),
+                orientationLocked = playerPrefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
+                backAction = playerPrefs.getString(PlayerPrefs.KEY_BACK_ACTION, PlayerPrefs.BACK_ACTION_STOP)
+                    ?: PlayerPrefs.BACK_ACTION_STOP,
+            )
+        }
         viewModelScope.launch {
             authRepo.currentUser.collect { user ->
                 _uiState.update { it.copy(signedInEmail = user?.email) }
             }
         }
+    }
+
+    fun setDefaultMaxHeight(height: Int) {
+        playerPrefs.edit().putInt(PlayerPrefs.KEY_DEFAULT_MAX_HEIGHT, height).apply()
+        _uiState.update { it.copy(defaultMaxHeight = height) }
+    }
+
+    fun setCaptionScale(scale: Float) {
+        playerPrefs.edit().putFloat(PlayerPrefs.KEY_CAPTION_SCALE, scale).apply()
+        _uiState.update { it.copy(captionScale = scale) }
+    }
+
+    fun setOrientationLocked(locked: Boolean) {
+        playerPrefs.edit().putBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, locked).apply()
+        _uiState.update { it.copy(orientationLocked = locked) }
+    }
+
+    fun setBackAction(action: String) {
+        playerPrefs.edit().putString(PlayerPrefs.KEY_BACK_ACTION, action).apply()
+        _uiState.update { it.copy(backAction = action) }
     }
 
     fun importFromJson(stream: InputStream) {

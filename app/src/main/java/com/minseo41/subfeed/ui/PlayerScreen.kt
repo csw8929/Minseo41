@@ -41,7 +41,9 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import com.minseo41.subfeed.service.SubFeedMediaSessionService
 import com.minseo41.subfeed.ui.player.CaptionMenu
 import com.minseo41.subfeed.ui.player.DoubleTapSkipOverlay
@@ -50,9 +52,9 @@ import com.minseo41.subfeed.ui.player.PlayerControls
 import com.minseo41.subfeed.ui.player.PlayerTopBar
 import com.minseo41.subfeed.ui.player.QualityMenu
 import com.minseo41.subfeed.ui.player.QualityOption
-import com.minseo41.subfeed.ui.player.ResumeBanner
 import kotlinx.coroutines.delay
 
+@OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
     videoId: String,
@@ -62,12 +64,15 @@ fun PlayerScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val activity = remember(context) { context.findComponentActivity() }
-
-    LaunchedEffect(videoId) { viewModel.loadVideo(videoId) }
+    val playerPrefs = remember(context) {
+        context.getSharedPreferences(PlayerPrefs.NAME, Context.MODE_PRIVATE)
+    }
 
     // Service에 살아있는 ExoPlayer에 MediaController로 binding.
     // 화면 꺼짐 / 백그라운드에서도 service가 foreground로 유지되어 audio가 끊기지 않음.
     var mediaController by remember { mutableStateOf<MediaController?>(null) }
+
+    LaunchedEffect(videoId) { viewModel.loadVideo(videoId) }
     DisposableEffect(context) {
         val sessionToken = SessionToken(
             context,
@@ -79,10 +84,16 @@ fun PlayerScreen(
             ContextCompat.getMainExecutor(context),
         )
         onDispose {
-            // 화면 떠나도 service player는 유지(백그라운드 재생). controller만 disconnect.
-            mediaController?.release()
+            val ctrl = mediaController
             mediaController = null
             future.cancel(true)
+            // pause + release는 다음 main thread tick으로 미뤄 popBackStack 애니메이션을 막지 않게 함.
+            if (ctrl != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    runCatching { ctrl.pause() }
+                    runCatching { ctrl.release() }
+                }
+            }
         }
     }
 
@@ -90,6 +101,15 @@ fun PlayerScreen(
     var currentPositionMs by remember { mutableStateOf(0L) }
     var durationMs by remember { mutableStateOf(0L) }
     var isSeeking by remember { mutableStateOf(false) }
+    // setMediaItem 직후 controller.currentPosition이 잠깐 0으로 reset되는 사이 polling이
+    // 그 0을 읽어 UI에 깜빡임이 발생. 이 시각 이전엔 polling을 무시하고 UI를 보존.
+    var skipPositionPollUntilMs by remember { mutableStateOf(0L) }
+    // back 누른 직후 PlayerView surface 가 잠깐 더 살아있어 영상이 보이는 깜빡임 방지.
+    // true 이면 PlayerView 대신 검정 박스만 표시 → popBackStack 후 화면 전환.
+    var isExiting by remember { mutableStateOf(false) }
+    // 새 영상 진입 vs 같은 영상 내 자막 변경 구분 — 새 영상 진입 시 controller.currentPosition은
+    // 이전 영상의 위치라 신뢰하면 안 됨.
+    var lastPreparedVideoId by remember { mutableStateOf<String?>(null) }
     var controlsVisible by remember { mutableStateOf(true) }
     var qualityMenuOpen by remember { mutableStateOf(false) }
     var captionMenuOpen by remember { mutableStateOf(false) }
@@ -107,6 +127,9 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 isPlayingState = isPlaying
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                android.util.Log.e("SubFeedPlayer", "onPlayerError ${error.errorCodeName}: ${error.message}", error)
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 val heights = tracks.groups
@@ -134,7 +157,7 @@ fun PlayerScreen(
         val controller = mediaController ?: return@LaunchedEffect
         while (true) {
             delay(500L)
-            if (!isSeeking) {
+            if (!isSeeking && System.currentTimeMillis() >= skipPositionPollUntilMs) {
                 currentPositionMs = controller.currentPosition
                 durationMs = controller.duration.coerceAtLeast(0L)
             }
@@ -154,7 +177,14 @@ fun PlayerScreen(
     LaunchedEffect(mediaController, uiState.streamInfo, uiState.captionSrtUri) {
         val controller = mediaController ?: return@LaunchedEffect
         val info = uiState.streamInfo ?: return@LaunchedEffect
-        val savedPos = controller.currentPosition.takeIf { it > 0L } ?: uiState.resumePositionMs
+        val isNewVideo = videoId != lastPreparedVideoId
+        // 새 영상 진입 시: controller.currentPosition은 이전 영상 위치라 무시. saved 위치만 사용.
+        // 같은 영상 안에서 자막 변경 시: controller.currentPosition (현재 재생 위치) 보존.
+        val savedPos = if (isNewVideo) {
+            uiState.resumePositionMs
+        } else {
+            controller.currentPosition.takeIf { it > 0L } ?: uiState.resumePositionMs
+        }
         val raw = info.streamUrl
         // mediaId에 videoId를 박아 service가 deep-link PendingIntent 갱신에 사용.
         val builder = when {
@@ -181,10 +211,23 @@ fun PlayerScreen(
                 )
             )
         }
-        controller.setMediaItem(builder.build())
-        controller.prepare()
-        if (savedPos > 0L) controller.seekTo(savedPos)
+        // setMediaItem 후 seekTo 패턴은 seekbar가 0으로 갔다가 saved로 점프하는 깜빡임을 만든다.
+        // startPositionMs를 직접 넘겨 처음부터 그 위치에서 prepare하도록 한다.
+        val startPos = savedPos.coerceAtLeast(0L)
+        // 새 영상 진입 시: 이전 PlayerScreen이 남긴 paused state + cached source 명시적 clear.
+        // clearMediaItems 가 없으면 ExoPlayer가 같은 mediaId의 이전 manifest cache를 재사용해
+        // expired HLS chunk URL을 fetch하다 HTTP 403 으로 죽는 케이스가 있다.
+        if (isNewVideo) {
+            runCatching { controller.stop() }
+            runCatching { controller.clearMediaItems() }
+        }
+        controller.setMediaItem(builder.build(), startPos)
+        // prepare 호출 전에 playWhenReady=true를 set해서 STATE_READY 진입 즉시 재생 시작.
         controller.playWhenReady = true
+        controller.prepare()
+        currentPositionMs = startPos
+        skipPositionPollUntilMs = System.currentTimeMillis() + 1_200L
+        lastPreparedVideoId = videoId
     }
 
     // 화질 선택 변경 시 TrackSelectionParameters 갱신
@@ -211,8 +254,8 @@ fun PlayerScreen(
         }
     }
 
-    // 전체화면 토글 시 orientation + system bars
-    DisposableEffect(uiState.isFullscreen) {
+    // 전체화면 토글 + 회전 잠금 토글 시 orientation + system bars
+    DisposableEffect(uiState.isFullscreen, uiState.orientationLocked) {
         val act = activity ?: return@DisposableEffect onDispose { }
         val window = act.window
         val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -221,7 +264,11 @@ fun PlayerScreen(
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            act.requestedOrientation = if (uiState.orientationLocked) {
+                ActivityInfo.SCREEN_ORIENTATION_LOCKED
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
         onDispose {
@@ -266,6 +313,7 @@ fun PlayerScreen(
             ),
     ) {
         when {
+            isExiting -> Unit  // back 직후: PlayerView 그리지 않고 검정 박스만 표시
             uiState.isLoading || mediaController == null ->
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
             uiState.error != null -> Text(
@@ -281,6 +329,9 @@ fun PlayerScreen(
                 },
                 update = { view ->
                     view.player = mediaController
+                    view.subtitleView?.setFractionalTextSize(
+                        SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * uiState.selectedCaptionScale
+                    )
                 },
                 modifier = Modifier.fillMaxSize(),
             )
@@ -323,30 +374,28 @@ fun PlayerScreen(
                         },
                         qualityEnabled = uiState.isHlsStream,
                         captionEnabled = uiState.selectedCaptionLanguage != null,
-                        backgroundPlaybackEnabled = uiState.backgroundPlaybackEnabled,
+                        orientationLocked = uiState.orientationLocked,
                         onBackClick = {
                             viewModel.savePositionNow(controller.currentPosition)
-                            if (uiState.isFullscreen) {
-                                viewModel.setFullscreen(false)
-                            } else {
-                                onBack()
+                            when {
+                                uiState.isFullscreen -> viewModel.setFullscreen(false)
+                                playerPrefs.getString(
+                                    PlayerPrefs.KEY_BACK_ACTION,
+                                    PlayerPrefs.BACK_ACTION_STOP,
+                                ) == PlayerPrefs.BACK_ACTION_PIP &&
+                                    tryEnterPip(activity) -> Unit
+                                else -> {
+                                    isExiting = true
+                                    runCatching { controller.pause() }
+                                    onBack()
+                                }
                             }
                         },
                         onQualityClick = { qualityMenuOpen = true },
                         onCaptionClick = { captionMenuOpen = true },
                         onPipClick = { tryEnterPip(activity) },
-                        onToggleBackgroundPlayback = { viewModel.toggleBackgroundPlayback() },
+                        onToggleOrientationLock = { viewModel.toggleOrientationLocked() },
                     )
-                    if (uiState.showResumeBanner && uiState.resumePositionMs > 0L) {
-                        ResumeBanner(
-                            resumePositionMs = uiState.resumePositionMs,
-                            onRestartFromBeginning = {
-                                controller.seekTo(0L)
-                                viewModel.restartFromBeginning()
-                            },
-                            onDismiss = { viewModel.dismissResumeBanner() },
-                        )
-                    }
                     Box(modifier = Modifier.weight(1f)) {
                         PlayerControls(
                             isPlaying = isPlayingState,
@@ -414,8 +463,20 @@ fun PlayerScreen(
             CaptionMenu(
                 tracks = uiState.streamInfo?.captionTracks.orEmpty(),
                 selectedLanguageCode = uiState.selectedCaptionLanguage,
+                selectedScale = uiState.selectedCaptionScale,
                 onSelect = {
                     viewModel.selectCaption(it)
+                    captionMenuOpen = false
+                },
+                onSelectScale = { scale ->
+                    viewModel.selectCaptionScale(scale)
+                    if (uiState.selectedCaptionLanguage == null) {
+                        val tracks = uiState.streamInfo?.captionTracks.orEmpty()
+                        val pick = tracks.firstOrNull { it.languageCode.startsWith("ko") }
+                            ?: tracks.firstOrNull { it.languageCode.startsWith("en") }
+                            ?: tracks.firstOrNull()
+                        pick?.let { viewModel.selectCaption(it) }
+                    }
                     captionMenuOpen = false
                 },
                 onDismiss = { captionMenuOpen = false },
@@ -424,13 +485,13 @@ fun PlayerScreen(
     }
 }
 
-private fun tryEnterPip(activity: ComponentActivity?) {
-    if (activity == null) return
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+private fun tryEnterPip(activity: ComponentActivity?): Boolean {
+    if (activity == null) return false
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
     val params = PictureInPictureParams.Builder()
         .setAspectRatio(Rational(16, 9))
         .build()
-    runCatching { activity.enterPictureInPictureMode(params) }
+    return runCatching { activity.enterPictureInPictureMode(params) }.getOrDefault(false)
 }
 
 private fun Context.findComponentActivity(): ComponentActivity? {

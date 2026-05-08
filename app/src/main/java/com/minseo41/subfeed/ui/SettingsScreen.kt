@@ -5,10 +5,13 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -61,6 +64,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -109,6 +113,51 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            Text("재생 기본값", style = MaterialTheme.typography.titleMedium)
+
+            Text("기본 화질", style = MaterialTheme.typography.bodyMedium)
+            QualityDefaultRow(
+                selected = uiState.defaultMaxHeight,
+                onSelect = { viewModel.setDefaultMaxHeight(it) },
+            )
+
+            Text("자막 크기", style = MaterialTheme.typography.bodyMedium)
+            CaptionScaleRow(
+                selected = uiState.captionScale,
+                onSelect = { viewModel.setCaptionScale(it) },
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    "화면 회전 잠금",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(
+                    checked = uiState.orientationLocked,
+                    onCheckedChange = { viewModel.setOrientationLocked(it) },
+                )
+            }
+            Text(
+                "재생 화면이 의도치 않게 회전하지 않도록 고정합니다 (풀스크린은 가로 강제 유지).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Text("back 키 동작", style = MaterialTheme.typography.bodyMedium)
+            BackActionRow(
+                selected = uiState.backAction,
+                onSelect = { viewModel.setBackAction(it) },
+            )
+            Text(
+                "홈 키·폴드 닫기는 항상 백그라운드 재생 유지. 이 옵션은 back 키만 적용됩니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            HorizontalDivider()
+
             Text("채널 관리", style = MaterialTheme.typography.titleMedium)
 
             Text(
@@ -132,5 +181,57 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun QualityDefaultRow(selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PlayerPrefs.QUALITY_OPTIONS.forEach { height ->
+            val label = if (height == 0) "자동" else "${height}p"
+            FilterChip(
+                selected = selected == height,
+                onClick = { onSelect(height) },
+                label = { Text(label) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CaptionScaleRow(selected: Float, onSelect: (Float) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PlayerPrefs.CAPTION_SCALE_OPTIONS.forEach { scale ->
+            FilterChip(
+                selected = selected == scale,
+                onClick = { onSelect(scale) },
+                label = { Text(PlayerPrefs.captionScaleLabel(scale)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BackActionRow(selected: String, onSelect: (String) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = selected == PlayerPrefs.BACK_ACTION_STOP,
+            onClick = { onSelect(PlayerPrefs.BACK_ACTION_STOP) },
+            label = { Text("정지") },
+        )
+        FilterChip(
+            selected = selected == PlayerPrefs.BACK_ACTION_PIP,
+            onClick = { onSelect(PlayerPrefs.BACK_ACTION_PIP) },
+            label = { Text("PIP 진입") },
+        )
     }
 }
