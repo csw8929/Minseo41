@@ -80,15 +80,15 @@ class SettingsViewModel @Inject constructor(
         _uiState.update { it.copy(defaultFullscreen = enabled) }
     }
 
-    fun importFromJson(stream: InputStream) {
+    fun importFromStream(stream: InputStream) {
         viewModelScope.launch {
-            runCatching { subscriptionRepo.importFromJson(stream) }
+            runCatching { subscriptionRepo.importFromStream(stream) }
                 .onSuccess { count ->
                     _uiState.update { it.copy(message = "${count}개 채널 import 됨") }
                 }
                 .onFailure { e ->
-                    Log.e(TAG, "JSON import 실패", e)
-                    _uiState.update { it.copy(message = "JSON import 실패: ${e.message}") }
+                    Log.e(TAG, "import 실패", e)
+                    _uiState.update { it.copy(message = "import 실패: ${e.message}") }
                 }
         }
     }

@@ -29,12 +29,12 @@ fun SettingsScreen(
     val channelCount by viewModel.channelCount.collectAsState()
     val context = LocalContext.current
 
-    val jsonLauncher = rememberLauncherForActivityResult(
+    val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         uri?.let {
             context.contentResolver.openInputStream(it)?.use { stream ->
-                viewModel.importFromJson(stream)
+                viewModel.importFromStream(stream)
             }
         }
     }
@@ -100,16 +100,21 @@ fun SettingsScreen(
             Text("구독 채널 import", style = MaterialTheme.typography.titleMedium)
 
             Text(
-                "JSON 파일을 선택하면 기존 채널 목록을 모두 교체합니다 (즐겨찾기는 유지).",
+                "JSON 또는 Takeout XML 파일을 선택하면 기존 채널 목록을 모두 교체합니다 (즐겨찾기는 유지). XML 일 때는 windowDays / maxCount 가 기본값으로 적용됩니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
             Button(
                 onClick = {
-                    jsonLauncher.launch(arrayOf("application/json", "*/*"))
+                    importLauncher.launch(arrayOf(
+                        "application/json",
+                        "application/xml",
+                        "text/xml",
+                        "*/*",
+                    ))
                 },
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("JSON 파일 import")
+                Text("JSON / XML 파일 import")
             }
 
             HorizontalDivider()

@@ -11,7 +11,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import java.io.InputStream
+import java.io.StringReader
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -47,10 +50,12 @@ class SubscriptionRepo @Inject constructor(
         channelDao.deleteById(id)
     }
 
-    // JSON import — 기존 channels 모두 삭제하고 JSON 내용으로 교체. favorites 테이블은 보존됨.
-    suspend fun importFromJson(stream: InputStream): Int {
+    // 채널 import — 기존 channels 모두 삭제하고 파일 내용으로 교체. favorites 테이블은 보존됨.
+    // 파일 내용 첫 글자로 JSON / XML 자동 감지. XML 일 때는 windowDays / maxCount 가 default 값으로 들어감.
+    suspend fun importFromStream(stream: InputStream): Int {
         val text = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        val parsed = Json { ignoreUnknownKeys = true }.decodeFromString<List<ChannelJson>>(text)
+        val parsed = if (text.trimStart().startsWith("<")) parseTakeoutXml(text)
+            else parseChannelJson(text)
         val entities = parsed.mapIndexed { index, c ->
             ChannelEntity(
                 id = c.id,
@@ -63,6 +68,66 @@ class SubscriptionRepo @Inject constructor(
         channelDao.deleteAll()
         channelDao.insertAll(entities)
         return entities.size
+    }
+
+    private fun parseChannelJson(text: String): List<ChannelJson> =
+        Json { ignoreUnknownKeys = true }.decodeFromString(text)
+
+    // YouTube Takeout subscriptions.xml (Atom + yt:channelId 네임스페이스) 파서.
+    // <entry> 안의 <yt:channelId> 와 <title> 만 추출. windowDays / maxCount 는 비워서 default 값 적용.
+    private fun parseTakeoutXml(text: String): List<ChannelJson> {
+        val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }
+        val parser = factory.newPullParser()
+        parser.setInput(StringReader(text))
+
+        val channels = mutableListOf<ChannelJson>()
+        val seen = mutableSetOf<String>()
+        var inEntry = false
+        var currentTag: String? = null
+        var currentId: String? = null
+        var currentName: String? = null
+
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> {
+                    val local = parser.name
+                    if (local == "entry") {
+                        inEntry = true
+                        currentId = null
+                        currentName = null
+                    }
+                    currentTag = local
+                }
+                XmlPullParser.TEXT -> if (inEntry) {
+                    val txt = parser.text?.trim().orEmpty()
+                    if (txt.isNotEmpty()) {
+                        when (currentTag) {
+                            "channelId" -> currentId = txt
+                            "title" -> if (currentName == null) currentName = txt
+                        }
+                    }
+                }
+                XmlPullParser.END_TAG -> {
+                    if (parser.name == "entry") {
+                        val cid = currentId
+                        if (cid != null && cid.isNotEmpty() && cid !in seen) {
+                            seen.add(cid)
+                            channels += ChannelJson(
+                                id = cid,
+                                name = currentName ?: cid,
+                                windowDays = null,
+                                maxCount = null,
+                            )
+                        }
+                        inEntry = false
+                    }
+                    currentTag = null
+                }
+            }
+            event = parser.next()
+        }
+        return channels
     }
 
     // 채널별 windowDays / maxCount 적용해 영상 가져오기.
