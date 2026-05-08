@@ -33,7 +33,7 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
             val channelId = channelUrl.substringAfterLast("/").substringBefore("?")
             val rssUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
             // 1차: RSS. YouTube가 RSS endpoint 를 봇 차단한 시점엔 HTML 응답 → 2차로.
-            val first = OkHttpDownloader.get(rssUrl)
+            val first = OkHttpDownloader.get(rssUrl, OkHttpDownloader.RSS_HEADERS)
             if (first.startsWith("<?xml")) {
                 return@withContext parseYoutubeRss(first)
             }
@@ -288,14 +288,14 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
 // OkHttp 기반 GET/POST helper. (이전엔 NewPipe Extractor의 Downloader subclass였으나
 // NewPipe 의존성이 protobuf 충돌을 일으켜 제거됨 — RSS / InnerTube 호출은 이 helper만 쓰면 충분.)
 object OkHttpDownloader {
-    // YouTube RSS가 봇/EU consent 페이지로 redirect되는 걸 막기 위한 fallback 헤더 set.
-    // 핵심: CONSENT=YES+cb 쿠키 — yt-dlp 등에서 사용하는 표준 우회 방식.
-    val DESKTOP_HEADERS: Map<String, String> = mapOf(
+    // YouTube RSS가 봇/EU consent 페이지로 redirect되는 걸 막기 위한 헤더 set.
+    // CONSENT=YES+cb 쿠키는 yt-dlp 등에서 사용하는 표준 EU 동의 우회.
+    val RSS_HEADERS: Map<String, String> = mapOf(
         "User-Agent" to
-            "Mozilla/5.0 (Linux; Android 12; SM-F936N) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-        "Accept" to "application/atom+xml,application/xml,text/xml,*/*;q=0.8",
-        "Accept-Language" to "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        "Accept" to "application/atom+xml, application/xml, text/xml, */*;q=0.1",
+        "Accept-Language" to "ko-KR,ko;q=0.9,en;q=0.8",
         "Cookie" to "CONSENT=YES+cb",
     )
 
