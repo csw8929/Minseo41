@@ -1,5 +1,6 @@
 package com.minseo41.subfeed.data
 
+import android.util.Log
 import com.minseo41.subfeed.model.VideoItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,8 +19,12 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 // VideoExtractor 구현체.
-// - 채널 피드: YouTube RSS (안정적, API 변경에 영향 없음)
-// - 스트림 URL + 자막: YouTube InnerTube API (Android 클라이언트) — 공식 YouTube 앱과 동일 방식
+// - 채널 피드: YouTube RSS — fallback: InnerTube `browse` API (videos tab)
+// - 스트림 URL + 자막: YouTube InnerTube API (iOS/ANDROID_VR/TVHTML5 우선)
+private const val INNERTUBE_WEB_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
+// "Videos" tab 의 magic params (uploaded videos 만 노출, shorts/live 거의 제외). yt-dlp 도 같은 값 사용.
+private const val VIDEOS_TAB_PARAMS = "EgZ2aWRlb3PyBgQKAjoA"
+
 @Singleton
 class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
 
@@ -27,8 +32,25 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
         withContext(Dispatchers.IO) {
             val channelId = channelUrl.substringAfterLast("/").substringBefore("?")
             val rssUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
-            val body = OkHttpDownloader.get(rssUrl)
-            parseYoutubeRss(body)
+            // 1차: RSS. YouTube가 RSS endpoint 를 봇 차단한 시점엔 HTML 응답 → 2차로.
+            val first = OkHttpDownloader.get(rssUrl)
+            if (first.startsWith("<?xml")) {
+                return@withContext parseYoutubeRss(first)
+            }
+            // 2차: InnerTube `browse` API (videos tab) — 어제 fbf0156에서 검증된 방식.
+            Log.d("SubFeedExtractor", "RSS blocked, falling back to InnerTube browse — channelId=$channelId")
+            val raw = OkHttpDownloader.post(
+                url = "https://www.youtube.com/youtubei/v1/browse?key=$INNERTUBE_WEB_KEY&prettyPrint=false",
+                body = """{"browseId":"$channelId","params":"$VIDEOS_TAB_PARAMS","context":{"client":{"clientName":"WEB","clientVersion":"2.20250101.00.00","hl":"en","gl":"US"}}}""",
+                headers = mapOf(
+                    "Content-Type" to "application/json",
+                    "X-YouTube-Client-Name" to "1",
+                    "X-YouTube-Client-Version" to "2.20250101.00.00",
+                    "Origin" to "https://www.youtube.com",
+                    "Referer" to "https://www.youtube.com/",
+                ),
+            )
+            parseInnerTubeChannelVideos(raw)
         }
 
     override suspend fun getStreamInfo(videoId: String): StreamInfo =
@@ -137,7 +159,82 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
         return result
     }
 
-    // YouTube Atom RSS 파싱 (channel_id 기반 피드, 채널당 최신 15개)
+    // InnerTube `browse` (videos tab) 응답에서 영상 목록 추출.
+    // 응답 구조: contents.twoColumnBrowseResultsRenderer.tabs[].tabRenderer.content.richGridRenderer.contents[].richItemRenderer.content.videoRenderer
+    private fun parseInnerTubeChannelVideos(raw: String): List<VideoItem> {
+        val data = JSONObject(raw)
+        val tabs = data.optJSONObject("contents")
+            ?.optJSONObject("twoColumnBrowseResultsRenderer")
+            ?.optJSONArray("tabs") ?: return emptyList()
+
+        var grid: JSONArray? = null
+        for (i in 0 until tabs.length()) {
+            val tabRenderer = tabs.getJSONObject(i).optJSONObject("tabRenderer") ?: continue
+            if (tabRenderer.optBoolean("selected")) {
+                grid = tabRenderer.optJSONObject("content")
+                    ?.optJSONObject("richGridRenderer")
+                    ?.optJSONArray("contents")
+                break
+            }
+        }
+        grid ?: return emptyList()
+
+        val items = mutableListOf<VideoItem>()
+        val now = System.currentTimeMillis()
+        for (i in 0 until grid.length()) {
+            val rich = grid.optJSONObject(i)?.optJSONObject("richItemRenderer") ?: continue
+            val v = rich.optJSONObject("content")?.optJSONObject("videoRenderer") ?: continue
+            val videoId = v.optString("videoId", "")
+            if (videoId.isEmpty()) continue
+            val title = v.optJSONObject("title")?.let { titleObj ->
+                titleObj.optString("simpleText").ifEmpty {
+                    titleObj.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: ""
+                }
+            } ?: ""
+            val channelName = v.optJSONObject("ownerText")?.optJSONArray("runs")
+                ?.optJSONObject(0)?.optString("text") ?: ""
+            val publishedText = v.optJSONObject("publishedTimeText")?.optString("simpleText") ?: ""
+            val uploadedAt = parseRelativeEnglishTime(publishedText, now)
+            val thumb = v.optJSONObject("thumbnail")?.optJSONArray("thumbnails")?.let { ts ->
+                if (ts.length() == 0) "" else ts.getJSONObject(ts.length() - 1).optString("url", "")
+            } ?: ""
+            items.add(
+                VideoItem(
+                    id = videoId,
+                    title = title,
+                    channelName = channelName,
+                    thumbnailUrl = thumb.ifEmpty { "https://i.ytimg.com/vi/$videoId/hqdefault.jpg" },
+                    durationSeconds = 0L,
+                    uploadedAt = uploadedAt,
+                )
+            )
+        }
+        return items
+    }
+
+    // "1 day ago", "3 hours ago", "7h ago", "1d ago", "2w ago" 등 영문 상대시각 → 절대 epoch ms.
+    // YouTube가 풀 표기와 축약 표기를 섞어 응답하므로 둘 다 처리.
+    // 라이브/예정 영상엔 publishedTimeText 가 없거나 매치 실패 → 0 반환 → cutoff 필터에서 제외됨.
+    private fun parseRelativeEnglishTime(text: String, now: Long): Long {
+        if (text.isBlank()) return 0L
+        val match = Regex("""(\d+)\s*([a-z]+)\s+ago""", RegexOption.IGNORE_CASE)
+            .find(text) ?: return 0L
+        val n = match.groupValues[1].toLong()
+        val unit = match.groupValues[2].lowercase()
+        val deltaMs = when (unit) {
+            "s", "sec", "secs", "second", "seconds" -> n * 1_000L
+            "m", "min", "mins", "minute", "minutes" -> n * 60_000L
+            "h", "hr", "hrs", "hour", "hours" -> n * 3_600_000L
+            "d", "day", "days" -> n * 86_400_000L
+            "w", "wk", "wks", "week", "weeks" -> n * 7L * 86_400_000L
+            "mo", "mos", "month", "months" -> n * 30L * 86_400_000L
+            "y", "yr", "yrs", "year", "years" -> n * 365L * 86_400_000L
+            else -> 0L
+        }
+        return now - deltaMs
+    }
+
+    // YouTube Atom RSS 파싱 (channel_id 기반 피드, 채널당 최신 15개) — 1차 path
     private fun parseYoutubeRss(xml: String): List<VideoItem> {
         val items = mutableListOf<VideoItem>()
         val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }
@@ -191,9 +288,23 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
 // OkHttp 기반 GET/POST helper. (이전엔 NewPipe Extractor의 Downloader subclass였으나
 // NewPipe 의존성이 protobuf 충돌을 일으켜 제거됨 — RSS / InnerTube 호출은 이 helper만 쓰면 충분.)
 object OkHttpDownloader {
-    fun get(url: String): String {
+    // YouTube RSS가 봇/EU consent 페이지로 redirect되는 걸 막기 위한 fallback 헤더 set.
+    // 핵심: CONSENT=YES+cb 쿠키 — yt-dlp 등에서 사용하는 표준 우회 방식.
+    val DESKTOP_HEADERS: Map<String, String> = mapOf(
+        "User-Agent" to
+            "Mozilla/5.0 (Linux; Android 12; SM-F936N) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "Accept" to "application/atom+xml,application/xml,text/xml,*/*;q=0.8",
+        "Accept-Language" to "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Cookie" to "CONSENT=YES+cb",
+    )
+
+    fun get(url: String, headers: Map<String, String> = emptyMap()): String {
         val client = OkHttpClient.Builder().followRedirects(true).build()
-        val request = OkRequest.Builder().url(url).build()
+        val request = OkRequest.Builder()
+            .url(url)
+            .apply { headers.forEach { (k, v) -> if (v.isNotEmpty()) addHeader(k, v) } }
+            .build()
         val response = client.newCall(request).execute()
         return response.body?.string() ?: throw IOException("Empty body: $url")
     }

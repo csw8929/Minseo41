@@ -118,6 +118,28 @@ adb -s <serial> push channels.json /sdcard/Download/
 
 > import 시 기존 채널 목록은 모두 교체됩니다. 즐겨찾기 영상은 보존됩니다.
 
+## 시청 위치 sync 로그 확인
+
+시청 위치 동기화 흐름(30초 debounce → Firestore write)이 어떻게 동작하는지 logcat으로 추적할 수 있습니다.
+
+```bash
+adb -s <serial> logcat -s SubFeedPlayerVM SubFeedSync
+```
+
+예상 흐름:
+
+```
+SubFeedPlayerVM  loadVideo: videoId=ABCD, savedPosition=0
+SubFeedPlayerVM  onPositionChanged defer scheduled (30s) — videoId=ABCD, positionMs=30000, deferredPrev=false
+SubFeedPlayerVM  onPositionChanged defer scheduled (30s) — videoId=ABCD, positionMs=60000, deferredPrev=true   ← 이전 30초 타이머 cancel + 새로 schedule
+SubFeedPlayerVM  onPositionChanged debounced save fired: videoId=ABCD, positionMs=60000                       ← 30초 동안 새 호출 없을 때 발사
+SubFeedSync      savePosition Firestore ok: videoId=ABCD, positionMs=60000
+```
+
+`deferredPrev=true`는 직전 30초 카운터가 살아있는 상태에서 새 호출이 들어와 cancel됐다는 뜻입니다. 즉 "defer 됨".
+
+화면 이탈 시(back, 다른 화면 진입)는 `savePositionNow` 가 즉시 호출되어 30초를 기다리지 않습니다.
+
 ## 디렉토리
 
 ```
