@@ -94,7 +94,7 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                 ),
             )
 
-            var lastError: Throwable = IllegalStateException("모든 클라이언트 실패")
+            var lastError: Throwable = IllegalStateException("InnerTube 모든 클라이언트 실패 — YouTube 가 PoToken 없는 외부 클라이언트를 차단한 영상")
             for ((url, body, extraHeaders) in attempts) {
                 runCatching {
                     val raw = OkHttpDownloader.post(

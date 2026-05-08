@@ -19,8 +19,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +42,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
@@ -153,6 +158,9 @@ fun PlayerScreen(
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 android.util.Log.e("SubFeedPlayer", "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+                viewModel.setPlaybackError(friendlyPlaybackMessage(error))
+                runCatching { controller.stop() }
+                runCatching { controller.clearMediaItems() }
             }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 val heights = tracks.groups
@@ -339,11 +347,30 @@ fun PlayerScreen(
             isExiting -> Unit  // back 직후: PlayerView 그리지 않고 검정 박스만 표시
             uiState.isLoading || mediaController == null ->
                 CircularProgressIndicator(Modifier.align(Alignment.Center))
-            uiState.error != null -> Text(
-                uiState.error!!,
-                color = Color.White,
-                modifier = Modifier.align(Alignment.Center).padding(16.dp),
-            )
+            uiState.error != null -> Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                Text(
+                    uiState.error!!,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                )
+                OutlinedButton(
+                    onClick = {
+                        isExiting = true
+                        runCatching { mediaController?.stop() }
+                        onBack()
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                ) {
+                    Text("목록으로")
+                }
+            }
             else -> AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
@@ -387,9 +414,9 @@ fun PlayerScreen(
             }
         }
 
-        // 더블탭 핫존 — 컨트롤이 가려질 때만 동작
+        // 더블탭 핫존 — 에러 상태에선 비활성 (메시지/버튼 클릭을 가리지 않게)
         val controller = mediaController
-        if (controller != null && !uiState.isInPipMode) {
+        if (controller != null && !uiState.isInPipMode && uiState.error == null) {
             DoubleTapSkipOverlay(
                 onSingleTap = { controlsVisible = !controlsVisible },
                 onSkipBack = {
@@ -405,8 +432,8 @@ fun PlayerScreen(
             )
         }
 
-        // 컨트롤 오버레이 — visible할 때만
-        if (controller != null && controlsVisible && !uiState.isInPipMode) {
+        // 컨트롤 오버레이 — visible할 때만, 에러 상태에선 가림
+        if (controller != null && controlsVisible && !uiState.isInPipMode && uiState.error == null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -587,6 +614,26 @@ private fun tryEnterPip(activity: ComponentActivity?): Boolean {
         .setAspectRatio(Rational(16, 9))
         .build()
     return runCatching { activity.enterPictureInPictureMode(params) }.getOrDefault(false)
+}
+
+// ExoPlayer PlaybackException → 사용자 친화 메시지.
+// 404/parse 류 — YouTube 가 외부 클라이언트의 stream URL 을 막은 영상 (PoToken 미보유 영상에 자주 발생).
+// 네트워크 류 — 단말 네트워크 회복 후 재시도 안내.
+// 그 외 — errorCodeName 그대로 노출하여 추후 진단 단서 제공.
+private fun friendlyPlaybackMessage(error: PlaybackException): String = when (error.errorCode) {
+    PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+    PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+    PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+        "이 영상은 재생할 수 없습니다.\n(YouTube 외부 재생 차단)"
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+    PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+    PlaybackException.ERROR_CODE_IO_UNSPECIFIED ->
+        "네트워크 오류입니다."
+    else ->
+        "재생 오류 (${error.errorCodeName})"
 }
 
 private fun Context.findComponentActivity(): ComponentActivity? {
