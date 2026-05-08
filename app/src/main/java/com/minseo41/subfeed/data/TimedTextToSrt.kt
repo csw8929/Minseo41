@@ -4,9 +4,44 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.StringReader
 
-// YouTube timedtext XML(srv1 transcript 형식)을 SRT로 변환.
+data class Cue(val startMs: Long, val endMs: Long, val text: String)
+
+// YouTube timedtext XML(srv1 transcript 형식) 파싱.
 // 형식: <transcript><text start="0.32" dur="1.5">Hello</text>...</transcript>
 object TimedTextToSrt {
+    fun convertToCues(xml: String): List<Cue> {
+        val factory = XmlPullParserFactory.newInstance()
+        val parser = factory.newPullParser()
+        parser.setInput(StringReader(xml))
+
+        val cues = mutableListOf<Cue>()
+        var startSec = 0.0
+        var durSec = 0.0
+        var text = ""
+
+        var event = parser.eventType
+        while (event != XmlPullParser.END_DOCUMENT) {
+            when (event) {
+                XmlPullParser.START_TAG -> if (parser.name == "text") {
+                    startSec = parser.getAttributeValue(null, "start")?.toDoubleOrNull() ?: 0.0
+                    durSec = parser.getAttributeValue(null, "dur")?.toDoubleOrNull() ?: 0.0
+                    text = ""
+                }
+                XmlPullParser.TEXT -> text = parser.text.orEmpty()
+                XmlPullParser.END_TAG -> if (parser.name == "text") {
+                    val cleaned = decodeEntities(text).trim()
+                    if (cleaned.isNotEmpty()) {
+                        val startMs = (startSec * 1000).toLong()
+                        val endMs = ((startSec + durSec) * 1000).toLong()
+                        cues += Cue(startMs, endMs, cleaned)
+                    }
+                }
+            }
+            event = parser.next()
+        }
+        return cues
+    }
+
     fun convert(xml: String): String {
         val factory = XmlPullParserFactory.newInstance()
         val parser = factory.newPullParser()

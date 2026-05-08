@@ -29,7 +29,6 @@ fun PlayerBottomBar(
     durationMs: Long,
     isFullscreen: Boolean,
     onSeek: (Long) -> Unit,
-    onSeekStart: () -> Unit,
     onSeekFinished: () -> Unit,
     onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier,
@@ -57,10 +56,7 @@ fun PlayerBottomBar(
             val safePosition = currentPositionMs.coerceIn(0L, durationMs.coerceAtLeast(0L)).toFloat()
             Slider(
                 value = safePosition,
-                onValueChange = { v ->
-                    onSeekStart()
-                    onSeek(v.toLong())
-                },
+                onValueChange = { v -> onSeek(v.toLong()) },
                 onValueChangeFinished = onSeekFinished,
                 valueRange = 0f..safeDuration,
                 modifier = Modifier

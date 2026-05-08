@@ -1,11 +1,11 @@
 package com.minseo41.subfeed.ui
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.CaptionTrack
+import com.minseo41.subfeed.data.Cue
 import com.minseo41.subfeed.data.OkHttpDownloader
 import com.minseo41.subfeed.data.StreamInfo
 import com.minseo41.subfeed.data.SyncRepo
@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import javax.inject.Inject
 
 data class PlayerUiState(
@@ -31,7 +30,7 @@ data class PlayerUiState(
     val error: String? = null,
     val showResumeBanner: Boolean = false,
     val selectedCaptionLanguage: String? = null,
-    val captionSrtUri: Uri? = null,
+    val captionCues: List<Cue> = emptyList(),
     val availableQualityHeights: List<Int> = listOf(0), // 0 = 자동
     val isHlsStream: Boolean = false,
     val selectedMaxHeight: Int = 0,
@@ -55,7 +54,7 @@ class PlayerViewModel @Inject constructor(
     private var saveJob: Job? = null
     private var bannerJob: Job? = null
     private var currentVideoId: String = ""
-    private val captionUriCache = mutableMapOf<String, Uri>()
+    private val captionCuesCache = mutableMapOf<String, List<Cue>>()
     private val prefs = context.getSharedPreferences(PlayerPrefs.NAME, Context.MODE_PRIVATE)
 
     fun loadVideo(videoId: String) {
@@ -66,6 +65,7 @@ class PlayerViewModel @Inject constructor(
             selectedMaxHeight = prefs.getInt(PlayerPrefs.KEY_DEFAULT_MAX_HEIGHT, 0),
             selectedCaptionScale = prefs.getFloat(PlayerPrefs.KEY_CAPTION_SCALE, 1.0f),
             orientationLocked = prefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
+            isFullscreen = prefs.getBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, false),
         )
         viewModelScope.launch {
             val savedPosition = runCatching { syncRepo.getPosition(videoId) }
@@ -132,13 +132,13 @@ class PlayerViewModel @Inject constructor(
 
     fun selectCaption(track: CaptionTrack?) {
         if (track == null) {
-            _uiState.update { it.copy(selectedCaptionLanguage = null, captionSrtUri = null) }
+            _uiState.update { it.copy(selectedCaptionLanguage = null, captionCues = emptyList()) }
             return
         }
-        val cached = captionUriCache[track.languageCode]
+        val cached = captionCuesCache[track.languageCode]
         if (cached != null) {
             _uiState.update {
-                it.copy(selectedCaptionLanguage = track.languageCode, captionSrtUri = cached)
+                it.copy(selectedCaptionLanguage = track.languageCode, captionCues = cached)
             }
             return
         }
@@ -146,16 +146,13 @@ class PlayerViewModel @Inject constructor(
             runCatching {
                 withContext(Dispatchers.IO) {
                     val xml = OkHttpDownloader.get(track.baseUrl)
-                    val srt = TimedTextToSrt.convert(xml)
-                    val file = File(context.cacheDir, "captions_${currentVideoId}_${track.languageCode}.srt")
-                    file.writeText(srt, Charsets.UTF_8)
-                    Uri.fromFile(file)
+                    TimedTextToSrt.convertToCues(xml)
                 }
             }
-                .onSuccess { uri ->
-                    captionUriCache[track.languageCode] = uri
+                .onSuccess { cues ->
+                    captionCuesCache[track.languageCode] = cues
                     _uiState.update {
-                        it.copy(selectedCaptionLanguage = track.languageCode, captionSrtUri = uri)
+                        it.copy(selectedCaptionLanguage = track.languageCode, captionCues = cues)
                     }
                 }
                 .onFailure { e ->
@@ -191,7 +188,9 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun toggleOrientationLocked() {
-        _uiState.update { it.copy(orientationLocked = !it.orientationLocked) }
+        val newValue = !_uiState.value.orientationLocked
+        prefs.edit().putBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, newValue).apply()
+        _uiState.update { it.copy(orientationLocked = newValue) }
     }
 
     companion object {
@@ -204,10 +203,7 @@ object PlayerPrefs {
     const val KEY_DEFAULT_MAX_HEIGHT = "defaultMaxHeight"
     const val KEY_CAPTION_SCALE = "captionScale"
     const val KEY_ORIENTATION_LOCKED = "orientationLocked"
-    const val KEY_BACK_ACTION = "backAction"
-
-    const val BACK_ACTION_STOP = "stop"
-    const val BACK_ACTION_PIP = "pip"
+    const val KEY_DEFAULT_FULLSCREEN = "defaultFullscreen"
 
     val QUALITY_OPTIONS: List<Int> = listOf(0, 1080, 720, 480, 360)
     val CAPTION_SCALE_OPTIONS: List<Float> = listOf(1.0f, 1.5f, 2.0f)

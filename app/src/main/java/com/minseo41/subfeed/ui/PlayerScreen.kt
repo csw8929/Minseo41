@@ -29,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowInsetsCompat
@@ -38,12 +39,12 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import com.minseo41.subfeed.service.SubFeedMediaSessionService
 import com.minseo41.subfeed.ui.player.CaptionMenu
 import com.minseo41.subfeed.ui.player.DoubleTapSkipOverlay
@@ -116,13 +117,35 @@ fun PlayerScreen(
     // seek throttle — 드래그 중 매 픽셀마다 seekTo 호출하면 HLS chunk fetch 비용이 큼.
     // 50ms 간격으로만 실제 seek, 그 사이 변경은 슬라이더 thumb 위치만 업데이트.
     var lastSeekAtMs by remember { mutableStateOf(0L) }
+    // 회전 잠금이 켜진 시점의 실제 화면 orientation 을 기억. SCREEN_ORIENTATION_LOCKED 는
+    // 호출 시점의 현재 방향을 그대로 잠그는데, 풀스크린(=강제 LANDSCAPE) 해제 직후에 호출되면
+    // 가로로 잠겨버린다. 사용자의 "잠근 그 시점 방향" 의도를 보존하려면 토글 순간 캡처해 둬야 함.
+    // 초기값은 mount 시점의 실제 orientation — prefs 에 잠금이 ON 인 채로 들어와도 정확히 복구.
+    var lockedOrientation by remember {
+        val initial = activity?.resources?.configuration?.orientation
+        val orientation = if (initial == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        mutableStateOf(orientation)
+    }
 
     DisposableEffect(mediaController) {
         val controller = mediaController ?: return@DisposableEffect onDispose { }
-        // controller 연결 시 초기 상태 sync
-        isPlayingState = controller.isPlaying
-        currentPositionMs = controller.currentPosition
-        durationMs = controller.duration.coerceAtLeast(0L)
+        // controller 연결 시 초기 상태 sync.
+        // 단, 서비스가 아직 이전 영상의 MediaItem 을 들고 있는 동안엔 그 position 을 UI 에 흘리면
+        // 새 영상 진입 직후 잠시 이전 영상의 seekbar 위치가 보인다. mediaId 일치할 때만 sync.
+        if (controller.currentMediaItem?.mediaId == videoId) {
+            isPlayingState = controller.isPlaying
+            currentPositionMs = controller.currentPosition
+            val d = controller.duration
+            if (d > 0L) durationMs = d
+        } else {
+            isPlayingState = false
+            currentPositionMs = 0L
+            durationMs = 0L
+        }
 
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -139,6 +162,8 @@ fun PlayerScreen(
                     }
                     .filter { it > 0 }
                 viewModel.updateAvailableQualities(heights)
+                // 새 영상 진입 시 사용자의 화질 선택을 새 트랙에도 재적용
+                applyQualitySelection(controller, viewModel.uiState.value.selectedMaxHeight)
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 viewModel.updateCurrentVideoHeight(videoSize.height)
@@ -152,14 +177,19 @@ fun PlayerScreen(
         }
     }
 
-    // 위치 polling — controller 활성 시에만
+    // 위치 polling — controller 활성 시에만, mediaId 일치할 때만 (이전 영상 position 누설 방지).
+    // duration 은 게이트 밖에서 갱신하되, 0/unknown 으로 덮어쓰지 않는다. clearMediaItems→setMediaItem
+    // reprepare 사이 controller.duration 이 잠깐 0 으로 떨어져서 썸이 11분→0→11분 점프하는 깜빡임 방지.
     LaunchedEffect(mediaController) {
         val controller = mediaController ?: return@LaunchedEffect
         while (true) {
-            delay(500L)
-            if (!isSeeking && System.currentTimeMillis() >= skipPositionPollUntilMs) {
-                currentPositionMs = controller.currentPosition
-                durationMs = controller.duration.coerceAtLeast(0L)
+            delay(200L)
+            if (controller.currentMediaItem?.mediaId == videoId) {
+                val d = controller.duration
+                if (d > 0L) durationMs = d
+                if (!isSeeking && System.currentTimeMillis() >= skipPositionPollUntilMs) {
+                    currentPositionMs = controller.currentPosition
+                }
             }
         }
     }
@@ -173,13 +203,13 @@ fun PlayerScreen(
         }
     }
 
-    // streamInfo / captionSrtUri 변경 시 MediaItem 재구성
-    LaunchedEffect(mediaController, uiState.streamInfo, uiState.captionSrtUri) {
+    // streamInfo 변경 시에만 MediaItem 재구성. 자막은 Compose 오버레이에서 직접 렌더링하므로
+    // captionSrtUri 같은 키가 사라져 자막 toggle 시 영상이 검정으로 깜빡이지 않는다.
+    LaunchedEffect(mediaController, uiState.streamInfo) {
         val controller = mediaController ?: return@LaunchedEffect
         val info = uiState.streamInfo ?: return@LaunchedEffect
         val isNewVideo = videoId != lastPreparedVideoId
         // 새 영상 진입 시: controller.currentPosition은 이전 영상 위치라 무시. saved 위치만 사용.
-        // 같은 영상 안에서 자막 변경 시: controller.currentPosition (현재 재생 위치) 보존.
         val savedPos = if (isNewVideo) {
             uiState.resumePositionMs
         } else {
@@ -200,17 +230,6 @@ fun PlayerScreen(
                 .setMediaId(videoId)
                 .setUri(raw)
         }
-        uiState.captionSrtUri?.let { uri ->
-            builder.setSubtitleConfigurations(
-                listOf(
-                    MediaItem.SubtitleConfiguration.Builder(uri)
-                        .setMimeType(MimeTypes.APPLICATION_SUBRIP)
-                        .setLanguage(uiState.selectedCaptionLanguage ?: "und")
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build()
-                )
-            )
-        }
         // setMediaItem 후 seekTo 패턴은 seekbar가 0으로 갔다가 saved로 점프하는 깜빡임을 만든다.
         // startPositionMs를 직접 넘겨 처음부터 그 위치에서 prepare하도록 한다.
         val startPos = savedPos.coerceAtLeast(0L)
@@ -230,20 +249,12 @@ fun PlayerScreen(
         lastPreparedVideoId = videoId
     }
 
-    // 화질 선택 변경 시 TrackSelectionParameters 갱신
+    // 화질 선택 변경 시 TrackSelectionParameters 갱신.
+    // setMaxVideoSize 는 "상한선" 이라 ABR 이 대역폭에 따라 더 낮은 화질을 선택 가능 → "선택=실제" 가 안 맞음.
+    // TrackSelectionOverride 로 그 height 의 track 을 명시적으로 잠궈 ABR 우회.
     LaunchedEffect(mediaController, uiState.selectedMaxHeight) {
         val controller = mediaController ?: return@LaunchedEffect
-        val params: TrackSelectionParameters =
-            if (uiState.selectedMaxHeight <= 0) {
-                controller.trackSelectionParameters.buildUpon()
-                    .clearVideoSizeConstraints()
-                    .build()
-            } else {
-                controller.trackSelectionParameters.buildUpon()
-                    .setMaxVideoSize(Int.MAX_VALUE, uiState.selectedMaxHeight)
-                    .build()
-            }
-        controller.trackSelectionParameters = params
+        applyQualitySelection(controller, uiState.selectedMaxHeight)
     }
 
     // 컨트롤 자동 숨김 — 5초 후 재생 중일 때만
@@ -255,7 +266,7 @@ fun PlayerScreen(
     }
 
     // 전체화면 토글 + 회전 잠금 토글 시 orientation + system bars
-    DisposableEffect(uiState.isFullscreen, uiState.orientationLocked) {
+    DisposableEffect(uiState.isFullscreen, uiState.orientationLocked, lockedOrientation) {
         val act = activity ?: return@DisposableEffect onDispose { }
         val window = act.window
         val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -264,8 +275,10 @@ fun PlayerScreen(
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
+            // 잠금 켜진 시점에 캡처해 둔 lockedOrientation 을 사용 — 풀스크린 해제 후
+            // 가로/세로 어느 쪽이든 사용자가 의도한 방향으로 복구.
             act.requestedOrientation = if (uiState.orientationLocked) {
-                ActivityInfo.SCREEN_ORIENTATION_LOCKED
+                lockedOrientation
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
@@ -286,8 +299,18 @@ fun PlayerScreen(
         if (isInPip) controlsVisible = false
     }
 
-    BackHandler(enabled = uiState.isFullscreen) {
-        viewModel.setFullscreen(false)
+    // 시스템 back key — 풀스크린이면 풀스크린 해제, 그 외엔 일시정지 + 리스트로.
+    BackHandler {
+        if (uiState.isFullscreen) {
+            viewModel.setFullscreen(false)
+        } else {
+            mediaController?.let { ctrl ->
+                viewModel.savePositionNow(ctrl.currentPosition)
+                runCatching { ctrl.pause() }
+            }
+            isExiting = true
+            onBack()
+        }
     }
 
     // 영상 재생 중일 때만 화면 꺼짐 방지 (일시정지/이탈 시 자동 해제).
@@ -325,16 +348,43 @@ fun PlayerScreen(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = false
+                        subtitleView?.visibility = android.view.View.GONE
                     }
                 },
                 update = { view ->
                     view.player = mediaController
-                    view.subtitleView?.setFractionalTextSize(
-                        SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * uiState.selectedCaptionScale
-                    )
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+        }
+
+        // 자막 오버레이 — ExoPlayer 의 SubtitleView 대신 Compose 에서 직접 렌더링.
+        // currentPositionMs (200ms 폴링) 로 active cue 찾아 Text 표시. toggle/언어 변경이
+        // MediaItem 재준비 없이 즉시 반영되고, 영상 검정 깜빡임도 사라짐.
+        val activeCue = if (uiState.captionCues.isEmpty()) null
+            else uiState.captionCues.firstOrNull {
+                currentPositionMs in it.startMs..it.endMs
+            }
+        if (activeCue != null && !uiState.isInPipMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 96.dp, start = 24.dp, end = 24.dp),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                Text(
+                    text = activeCue.text,
+                    color = Color.White,
+                    fontSize = (16f * uiState.selectedCaptionScale).sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .background(
+                            Color.Black.copy(alpha = 0.6f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
         }
 
         // 더블탭 핫존 — 컨트롤이 가려질 때만 동작
@@ -377,24 +427,31 @@ fun PlayerScreen(
                         orientationLocked = uiState.orientationLocked,
                         onBackClick = {
                             viewModel.savePositionNow(controller.currentPosition)
-                            when {
-                                uiState.isFullscreen -> viewModel.setFullscreen(false)
-                                playerPrefs.getString(
-                                    PlayerPrefs.KEY_BACK_ACTION,
-                                    PlayerPrefs.BACK_ACTION_STOP,
-                                ) == PlayerPrefs.BACK_ACTION_PIP &&
-                                    tryEnterPip(activity) -> Unit
-                                else -> {
-                                    isExiting = true
-                                    runCatching { controller.pause() }
-                                    onBack()
-                                }
+                            if (uiState.isFullscreen) {
+                                viewModel.setFullscreen(false)
+                            } else {
+                                isExiting = true
+                                runCatching { controller.pause() }
+                                onBack()
                             }
                         },
                         onQualityClick = { qualityMenuOpen = true },
                         onCaptionClick = { captionMenuOpen = true },
                         onPipClick = { tryEnterPip(activity) },
-                        onToggleOrientationLock = { viewModel.toggleOrientationLocked() },
+                        onToggleOrientationLock = {
+                            // OFF→ON 진입 직전에 현재 orientation 을 동기 캡처.
+                            // LaunchedEffect 로 캡처하면 DisposableEffect 가 먼저 적용돼 race 발생
+                            // (가로에서 잠금 → 잠깐 세로 → 다시 가로 깜빡임).
+                            if (!uiState.orientationLocked && !uiState.isFullscreen) {
+                                val o = activity?.resources?.configuration?.orientation
+                                lockedOrientation = if (o == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                } else {
+                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                }
+                            }
+                            viewModel.toggleOrientationLocked()
+                        },
                     )
                     Box(modifier = Modifier.weight(1f)) {
                         PlayerControls(
@@ -418,16 +475,21 @@ fun PlayerScreen(
                         currentPositionMs = currentPositionMs,
                         durationMs = durationMs,
                         isFullscreen = uiState.isFullscreen,
-                        // live scrub + 50ms throttle — leading edge에서 즉시 seek, 이후 50ms 간격으로만.
+                        // live scrub + 50ms throttle.
+                        // 드래그 시작은 isSeeking 전이로 감지 — Slider.onValueChange 가 매 픽셀 호출되므로
+                        // start callback 분리는 throttle 리셋을 매 tick 유발해 throttle 자체를 무력화시킨다.
                         onSeek = { ms ->
                             currentPositionMs = ms
+                            if (!isSeeking) {
+                                isSeeking = true
+                                lastSeekAtMs = 0L
+                            }
                             val now = android.os.SystemClock.uptimeMillis()
                             if (now - lastSeekAtMs >= 50L) {
                                 lastSeekAtMs = now
                                 controller.seekTo(ms)
                             }
                         },
-                        onSeekStart = { isSeeking = true; lastSeekAtMs = 0L },
                         onSeekFinished = {
                             // throttle로 빠진 마지막 위치 보정 — 항상 최종 currentPositionMs로 한 번 더 seek.
                             controller.seekTo(currentPositionMs)
@@ -482,6 +544,39 @@ fun PlayerScreen(
                 onDismiss = { captionMenuOpen = false },
             )
         }
+    }
+}
+
+// 화질 선택 적용. 0 = 자동 (ABR), 그 외 = 해당 height 의 track 을 override 로 강제.
+// `setMaxVideoSize` 는 상한선 + ABR 이라 대역폭 부족 시 더 낮은 트랙으로 떨어져 "선택 = 실제" 가
+// 불일치하던 문제를 해소.
+private fun applyQualitySelection(controller: MediaController, selectedMaxHeight: Int) {
+    val builder = controller.trackSelectionParameters.buildUpon()
+    if (selectedMaxHeight <= 0) {
+        // 자동: override / size constraint 모두 제거 → ABR 동작
+        builder.clearVideoSizeConstraints()
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        controller.trackSelectionParameters = builder.build()
+        return
+    }
+    // 특정 화질: 해당 height 의 track 을 명시적으로 잠금
+    val tracks = controller.currentTracks
+    val videoGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO }
+    if (videoGroup == null) {
+        // 트랙 정보가 아직 없으면 (loading 중) override 못 만듦. onTracksChanged 에서 재시도.
+        return
+    }
+    val targetIndex = (0 until videoGroup.length).firstOrNull { i ->
+        videoGroup.getTrackFormat(i).height == selectedMaxHeight
+    }
+    if (targetIndex != null) {
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        builder.addOverride(
+            TrackSelectionOverride(videoGroup.mediaTrackGroup, listOf(targetIndex))
+        )
+        // override 가 size constraint 보다 우선이지만, size constraint 가 남아있으면 혼동되니 제거.
+        builder.clearVideoSizeConstraints()
+        controller.trackSelectionParameters = builder.build()
     }
 }
 
