@@ -38,7 +38,8 @@ data class PlayerUiState(
     val currentVideoHeight: Int = 0, // ExoPlayer가 현재 실제 디코딩 중인 video height (자동 모드에서 채택된 해상도 확인용)
     val isFullscreen: Boolean = false,
     val isInPipMode: Boolean = false,
-    val backgroundPlaybackEnabled: Boolean = true,
+    val selectedCaptionScale: Float = 1.0f,
+    val orientationLocked: Boolean = false,
 )
 
 @HiltViewModel
@@ -55,21 +56,18 @@ class PlayerViewModel @Inject constructor(
     private var bannerJob: Job? = null
     private var currentVideoId: String = ""
     private val captionUriCache = mutableMapOf<String, Uri>()
-    private val prefs = context.getSharedPreferences("player", Context.MODE_PRIVATE)
-
-    init {
-        _uiState.update {
-            it.copy(backgroundPlaybackEnabled = prefs.getBoolean("backgroundPlayback", true))
-        }
-    }
+    private val prefs = context.getSharedPreferences(PlayerPrefs.NAME, Context.MODE_PRIVATE)
 
     fun loadVideo(videoId: String) {
         currentVideoId = videoId
+        // 동기 reset — 다른 영상 선택 시 이전 streamInfo/자막이 한 frame 더 그려지는 것 방지.
+        _uiState.value = PlayerUiState(
+            isLoading = true,
+            selectedMaxHeight = prefs.getInt(PlayerPrefs.KEY_DEFAULT_MAX_HEIGHT, 0),
+            selectedCaptionScale = prefs.getFloat(PlayerPrefs.KEY_CAPTION_SCALE, 1.0f),
+            orientationLocked = prefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
+        )
         viewModelScope.launch {
-            _uiState.value = PlayerUiState(
-                isLoading = true,
-                backgroundPlaybackEnabled = prefs.getBoolean("backgroundPlayback", true),
-            )
             val savedPosition = runCatching { syncRepo.getPosition(videoId) }
                 .onFailure { Log.e(TAG, "loadVideo getPosition failed", it) }
                 .getOrNull()?.positionMs ?: 0L
@@ -115,10 +113,12 @@ class PlayerViewModel @Inject constructor(
 
     // 30초 debounce — 재생 중 주기적으로 호출. ViewModel이 살아있는 동안만 의미 있으니 viewModelScope 사용.
     fun onPositionChanged(positionMs: Long) {
+        val hadPending = saveJob?.isActive == true
         saveJob?.cancel()
+        Log.d(TAG, "onPositionChanged defer scheduled (30s) — videoId=$currentVideoId, positionMs=$positionMs, deferredPrev=$hadPending")
         saveJob = viewModelScope.launch {
             delay(30_000L)
-            Log.d(TAG, "onPositionChanged debounced save: videoId=$currentVideoId, positionMs=$positionMs")
+            Log.d(TAG, "onPositionChanged debounced save fired: videoId=$currentVideoId, positionMs=$positionMs")
             syncRepo.savePositionDetached(currentVideoId, positionMs)
         }
     }
@@ -186,13 +186,32 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(isInPipMode = enabled) }
     }
 
-    fun toggleBackgroundPlayback() {
-        val newValue = !_uiState.value.backgroundPlaybackEnabled
-        prefs.edit().putBoolean("backgroundPlayback", newValue).apply()
-        _uiState.update { it.copy(backgroundPlaybackEnabled = newValue) }
+    fun selectCaptionScale(scale: Float) {
+        _uiState.update { it.copy(selectedCaptionScale = scale) }
+    }
+
+    fun toggleOrientationLocked() {
+        _uiState.update { it.copy(orientationLocked = !it.orientationLocked) }
     }
 
     companion object {
         private const val TAG = "SubFeedPlayerVM"
     }
+}
+
+object PlayerPrefs {
+    const val NAME = "player"
+    const val KEY_DEFAULT_MAX_HEIGHT = "defaultMaxHeight"
+    const val KEY_CAPTION_SCALE = "captionScale"
+    const val KEY_ORIENTATION_LOCKED = "orientationLocked"
+    const val KEY_BACK_ACTION = "backAction"
+
+    const val BACK_ACTION_STOP = "stop"
+    const val BACK_ACTION_PIP = "pip"
+
+    val QUALITY_OPTIONS: List<Int> = listOf(0, 1080, 720, 480, 360)
+    val CAPTION_SCALE_OPTIONS: List<Float> = listOf(1.0f, 1.5f, 2.0f)
+
+    fun captionScaleLabel(scale: Float): String =
+        if (scale % 1.0f == 0.0f) "${scale.toInt()}x" else "${scale}x"
 }

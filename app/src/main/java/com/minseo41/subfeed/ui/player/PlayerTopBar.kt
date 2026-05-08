@@ -12,18 +12,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ClosedCaptionDisabled
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PictureInPicture
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.filled.ScreenLockRotation
+import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,16 +34,14 @@ fun PlayerTopBar(
     qualityLabel: String,
     qualityEnabled: Boolean,
     captionEnabled: Boolean,
-    backgroundPlaybackEnabled: Boolean,
+    orientationLocked: Boolean,
     onBackClick: () -> Unit,
     onQualityClick: () -> Unit,
     onCaptionClick: () -> Unit,
     onPipClick: () -> Unit,
-    onToggleBackgroundPlayback: () -> Unit,
+    onToggleOrientationLock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
-
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -89,29 +82,18 @@ fun PlayerTopBar(
                 tint = Color.White,
             )
         }
+        IconButton(onClick = onToggleOrientationLock, modifier = Modifier.size(48.dp)) {
+            Icon(
+                imageVector = if (orientationLocked) Icons.Default.ScreenLockRotation else Icons.Default.ScreenRotation,
+                contentDescription = if (orientationLocked) "회전 잠금 해제" else "회전 잠금",
+                tint = Color.White,
+            )
+        }
         IconButton(onClick = onPipClick, modifier = Modifier.size(48.dp)) {
             Icon(
                 imageVector = Icons.Default.PictureInPicture,
                 contentDescription = "PIP",
                 tint = Color.White,
-            )
-        }
-        IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(48.dp)) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "옵션",
-                tint = Color.White,
-            )
-        }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            DropdownMenuItem(
-                text = {
-                    Text(if (backgroundPlaybackEnabled) "백그라운드 재생: 켬" else "백그라운드 재생: 끔")
-                },
-                onClick = {
-                    onToggleBackgroundPlayback()
-                    menuOpen = false
-                },
             )
         }
     }
