@@ -116,6 +116,19 @@ fun PlayerScreen(
     // seek throttle — 드래그 중 매 픽셀마다 seekTo 호출하면 HLS chunk fetch 비용이 큼.
     // 50ms 간격으로만 실제 seek, 그 사이 변경은 슬라이더 thumb 위치만 업데이트.
     var lastSeekAtMs by remember { mutableStateOf(0L) }
+    // 회전 잠금이 켜진 시점의 실제 화면 orientation 을 기억. SCREEN_ORIENTATION_LOCKED 는
+    // 호출 시점의 현재 방향을 그대로 잠그는데, 풀스크린(=강제 LANDSCAPE) 해제 직후에 호출되면
+    // 가로로 잠겨버린다. 사용자의 "잠근 그 시점 방향" 의도를 보존하려면 토글 순간 캡처해 둬야 함.
+    // 초기값은 mount 시점의 실제 orientation — prefs 에 잠금이 ON 인 채로 들어와도 정확히 복구.
+    var lockedOrientation by remember {
+        val initial = activity?.resources?.configuration?.orientation
+        val orientation = if (initial == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        mutableStateOf(orientation)
+    }
 
     DisposableEffect(mediaController) {
         val controller = mediaController ?: return@DisposableEffect onDispose { }
@@ -269,7 +282,7 @@ fun PlayerScreen(
     }
 
     // 전체화면 토글 + 회전 잠금 토글 시 orientation + system bars
-    DisposableEffect(uiState.isFullscreen, uiState.orientationLocked) {
+    DisposableEffect(uiState.isFullscreen, uiState.orientationLocked, lockedOrientation) {
         val act = activity ?: return@DisposableEffect onDispose { }
         val window = act.window
         val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -278,11 +291,10 @@ fun PlayerScreen(
             controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             controller.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            // SCREEN_ORIENTATION_LOCKED 는 호출 시점의 현재 orientation 을 잠근다.
-            // 풀스크린 해제 직후엔 아직 landscape 라 LOCKED 를 쓰면 가로 그대로 잠긴다.
-            // 잠금 의도는 작은 플레이어 UI(세로) 를 유지하는 것이므로 PORTRAIT 으로 명시.
+            // 잠금 켜진 시점에 캡처해 둔 lockedOrientation 을 사용 — 풀스크린 해제 후
+            // 가로/세로 어느 쪽이든 사용자가 의도한 방향으로 복구.
             act.requestedOrientation = if (uiState.orientationLocked) {
-                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                lockedOrientation
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
@@ -411,7 +423,20 @@ fun PlayerScreen(
                         onQualityClick = { qualityMenuOpen = true },
                         onCaptionClick = { captionMenuOpen = true },
                         onPipClick = { tryEnterPip(activity) },
-                        onToggleOrientationLock = { viewModel.toggleOrientationLocked() },
+                        onToggleOrientationLock = {
+                            // OFF→ON 진입 직전에 현재 orientation 을 동기 캡처.
+                            // LaunchedEffect 로 캡처하면 DisposableEffect 가 먼저 적용돼 race 발생
+                            // (가로에서 잠금 → 잠깐 세로 → 다시 가로 깜빡임).
+                            if (!uiState.orientationLocked && !uiState.isFullscreen) {
+                                val o = activity?.resources?.configuration?.orientation
+                                lockedOrientation = if (o == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                } else {
+                                    ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                }
+                            }
+                            viewModel.toggleOrientationLocked()
+                        },
                     )
                     Box(modifier = Modifier.weight(1f)) {
                         PlayerControls(
