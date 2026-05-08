@@ -6,18 +6,50 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.minseo41.subfeed.MainActivity
 
+@UnstableApi
 class SubFeedMediaSessionService : MediaSessionService() {
 
     private var mediaSession: MediaSession? = null
 
     override fun onCreate() {
         super.onCreate()
+        // 4xx HTTP 응답엔 retry 없이 즉시 fail. YouTube 가 막은 영상의 child playlist 가 404 일 때
+        // default policy 의 retry+backoff 로 5~7초 걸리던 것을 1~2초 안에 끝나도록.
+        // 401/403/404 는 fallback 해도 같은 manifest 안의 다른 variant 도 동일 검증으로 똑같이 실패 →
+        // retry/fallback 으로 시간 까먹지 말고 즉시 fail. (YouTube 가 막은 영상의 모든 variant 가 404 인
+        // 케이스에서 prepare 가 5초+ 걸리던 것을 1초 안에 끝내기 위함.)
+        // 429 / 5xx / network 류는 default 정책 유지 — 일시적 장애에 retry/fallback 가치 있음.
+        val loadErrorPolicy = object : DefaultLoadErrorHandlingPolicy() {
+            private fun isPermanentClientError(ex: Throwable?): Boolean =
+                ex is HttpDataSource.InvalidResponseCodeException &&
+                    ex.responseCode in setOf(401, 403, 404)
+
+            override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long =
+                if (isPermanentClientError(loadErrorInfo.exception)) C.TIME_UNSET
+                else super.getRetryDelayMsFor(loadErrorInfo)
+
+            override fun getFallbackSelectionFor(
+                fallbackOptions: LoadErrorHandlingPolicy.FallbackOptions,
+                loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo,
+            ): LoadErrorHandlingPolicy.FallbackSelection? =
+                if (isPermanentClientError(loadErrorInfo.exception)) null
+                else super.getFallbackSelectionFor(fallbackOptions, loadErrorInfo)
+        }
+        val mediaSourceFactory = DefaultMediaSourceFactory(this)
+            .setLoadErrorHandlingPolicy(loadErrorPolicy)
+
         val player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setUsage(C.USAGE_MEDIA)

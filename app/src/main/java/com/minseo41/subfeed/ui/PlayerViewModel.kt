@@ -88,10 +88,18 @@ class PlayerViewModel @Inject constructor(
                     if (savedPosition > 0L) startBannerCountdown()
                 }
                 .onFailure { e ->
-                    _uiState.update { it.copy(isLoading = false, error = e.message) }
+                    Log.e(TAG, "extractor 실패: videoId=$videoId", e)
+                    _uiState.update { it.copy(isLoading = false, error = friendlyExtractorMessage(e)) }
                 }
         }
     }
+
+    fun setPlaybackError(message: String) {
+        _uiState.update { it.copy(error = message, isLoading = false) }
+    }
+
+    private fun friendlyExtractorMessage(e: Throwable): String =
+        "이 영상은 재생할 수 없습니다.\n(YouTube 외부 재생 차단)"
 
     private fun startBannerCountdown() {
         bannerJob?.cancel()
