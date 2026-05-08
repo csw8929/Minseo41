@@ -39,6 +39,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -161,6 +162,8 @@ fun PlayerScreen(
                     }
                     .filter { it > 0 }
                 viewModel.updateAvailableQualities(heights)
+                // 새 영상 진입 시 사용자의 화질 선택을 새 트랙에도 재적용
+                applyQualitySelection(controller, viewModel.uiState.value.selectedMaxHeight)
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 viewModel.updateCurrentVideoHeight(videoSize.height)
@@ -246,20 +249,12 @@ fun PlayerScreen(
         lastPreparedVideoId = videoId
     }
 
-    // 화질 선택 변경 시 TrackSelectionParameters 갱신
+    // 화질 선택 변경 시 TrackSelectionParameters 갱신.
+    // setMaxVideoSize 는 "상한선" 이라 ABR 이 대역폭에 따라 더 낮은 화질을 선택 가능 → "선택=실제" 가 안 맞음.
+    // TrackSelectionOverride 로 그 height 의 track 을 명시적으로 잠궈 ABR 우회.
     LaunchedEffect(mediaController, uiState.selectedMaxHeight) {
         val controller = mediaController ?: return@LaunchedEffect
-        val params: TrackSelectionParameters =
-            if (uiState.selectedMaxHeight <= 0) {
-                controller.trackSelectionParameters.buildUpon()
-                    .clearVideoSizeConstraints()
-                    .build()
-            } else {
-                controller.trackSelectionParameters.buildUpon()
-                    .setMaxVideoSize(Int.MAX_VALUE, uiState.selectedMaxHeight)
-                    .build()
-            }
-        controller.trackSelectionParameters = params
+        applyQualitySelection(controller, uiState.selectedMaxHeight)
     }
 
     // 컨트롤 자동 숨김 — 5초 후 재생 중일 때만
@@ -549,6 +544,39 @@ fun PlayerScreen(
                 onDismiss = { captionMenuOpen = false },
             )
         }
+    }
+}
+
+// 화질 선택 적용. 0 = 자동 (ABR), 그 외 = 해당 height 의 track 을 override 로 강제.
+// `setMaxVideoSize` 는 상한선 + ABR 이라 대역폭 부족 시 더 낮은 트랙으로 떨어져 "선택 = 실제" 가
+// 불일치하던 문제를 해소.
+private fun applyQualitySelection(controller: MediaController, selectedMaxHeight: Int) {
+    val builder = controller.trackSelectionParameters.buildUpon()
+    if (selectedMaxHeight <= 0) {
+        // 자동: override / size constraint 모두 제거 → ABR 동작
+        builder.clearVideoSizeConstraints()
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        controller.trackSelectionParameters = builder.build()
+        return
+    }
+    // 특정 화질: 해당 height 의 track 을 명시적으로 잠금
+    val tracks = controller.currentTracks
+    val videoGroup = tracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO }
+    if (videoGroup == null) {
+        // 트랙 정보가 아직 없으면 (loading 중) override 못 만듦. onTracksChanged 에서 재시도.
+        return
+    }
+    val targetIndex = (0 until videoGroup.length).firstOrNull { i ->
+        videoGroup.getTrackFormat(i).height == selectedMaxHeight
+    }
+    if (targetIndex != null) {
+        builder.clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        builder.addOverride(
+            TrackSelectionOverride(videoGroup.mediaTrackGroup, listOf(targetIndex))
+        )
+        // override 가 size constraint 보다 우선이지만, size constraint 가 남아있으면 혼동되니 제거.
+        builder.clearVideoSizeConstraints()
+        controller.trackSelectionParameters = builder.build()
     }
 }
 
