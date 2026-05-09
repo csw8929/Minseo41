@@ -2,12 +2,12 @@ package com.minseo41.subfeed.data
 
 import com.minseo41.subfeed.data.db.ChannelDao
 import com.minseo41.subfeed.data.db.ChannelEntity
+import com.minseo41.subfeed.data.db.VideoDao
+import com.minseo41.subfeed.data.db.WatchPositionDao
 import com.minseo41.subfeed.model.SubscribedChannel
 import com.minseo41.subfeed.model.VideoItem
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -15,16 +15,14 @@ import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 import java.io.InputStream
 import java.io.StringReader
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class SubscriptionRepo @Inject constructor(
     private val channelDao: ChannelDao,
-    private val extractor: VideoExtractor,
+    private val videoDao: VideoDao,
+    private val watchPositionDao: WatchPositionDao,
 ) {
 
     fun observeChannels(): Flow<List<SubscribedChannel>> =
@@ -130,33 +128,22 @@ class SubscriptionRepo @Inject constructor(
         return channels
     }
 
-    // 채널별 windowDays / maxCount 적용해 영상 가져오기.
-    // - windowDays=N → today.minusDays(N-1) 부터 today까지 업로드된 영상만
-    // - maxCount → 채널당 위 필터 후 최신순 N개까지
-    suspend fun fetchTodayVideos(): List<VideoItem> = coroutineScope {
-        val today = LocalDate.now(ZoneId.systemDefault())
-        val channels = loadChannels()
-        channels.map { channel ->
-            async {
-                runCatching {
-                    val raw = extractor.getChannelFeed(SubscribedChannel.rssUrlFromId(channel.id))
-                    val cutoff = today.minusDays((channel.windowDays - 1).coerceAtLeast(0).toLong())
-                    raw
-                        .filter { video ->
-                            val uploadDate = Instant.ofEpochMilli(video.uploadedAt)
-                                .atZone(ZoneId.systemDefault())
-                                .toLocalDate()
-                            !uploadDate.isBefore(cutoff) && !uploadDate.isAfter(today)
-                        }
-                        .sortedByDescending { it.uploadedAt }
-                        .take(channel.maxCount)
-                }.getOrDefault(emptyList())
+    fun observeTodayFeed(): Flow<List<VideoItem>> =
+        combine(videoDao.observeAll(), watchPositionDao.observeAll()) { rows, positions ->
+            val posMap = positions.associateBy { it.videoId }
+            rows.map { v ->
+                VideoItem(
+                    id = v.videoId,
+                    title = v.title,
+                    channelName = v.channelName,
+                    thumbnailUrl = v.thumbnailUrl,
+                    durationSeconds = v.durationSeconds,
+                    uploadedAt = v.uploadedAt,
+                    isUnread = v.isUnread,
+                    watchPositionMs = posMap[v.videoId]?.positionMs,
+                )
             }
         }
-            .awaitAll()
-            .flatten()
-            .sortedByDescending { it.uploadedAt }
-    }
 
     @Serializable
     private data class ChannelJson(
@@ -173,12 +160,4 @@ private fun ChannelEntity.toModel(): SubscribedChannel = SubscribedChannel(
     url = SubscribedChannel.rssUrlFromId(id),
     windowDays = windowDays,
     maxCount = maxCount,
-)
-
-private fun SubscribedChannel.toEntity(sortOrder: Int): ChannelEntity = ChannelEntity(
-    id = id,
-    name = name,
-    windowDays = windowDays,
-    maxCount = maxCount,
-    sortOrder = sortOrder,
 )

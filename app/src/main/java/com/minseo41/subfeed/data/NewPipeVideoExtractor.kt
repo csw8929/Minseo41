@@ -108,10 +108,12 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                         ?: error("streamingData 없음: ${raw.take(300)}")
 
                     val captionTracks = parseCaptionTracks(json.optJSONObject("captions"))
+                    val durationSec = json.optJSONObject("videoDetails")
+                        ?.optLong("lengthSeconds", 0L) ?: 0L
 
                     // 1순위: HLS manifest — video+audio 모두 포함
                     val hls = streaming.optString("hlsManifestUrl", "")
-                    if (hls.isNotEmpty()) return@withContext StreamInfo("hls:$hls", captionTracks)
+                    if (hls.isNotEmpty()) return@withContext StreamInfo("hls:$hls", captionTracks, durationSec)
 
                     // 2순위: 최고화질 muxed 스트림 (formats — 보통 최대 720p)
                     val formats = streaming.optJSONArray("formats")
@@ -123,7 +125,7 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                             val h = f.optInt("height", 0)
                             if (u.isNotEmpty() && h > bestHeight) { bestUrl = u; bestHeight = h }
                         }
-                        if (bestUrl.isNotEmpty()) return@withContext StreamInfo(bestUrl, captionTracks)
+                        if (bestUrl.isNotEmpty()) return@withContext StreamInfo(bestUrl, captionTracks, durationSec)
                     }
 
                     error("스트림 URL 없음 (streamingData 있으나 재생 불가)")

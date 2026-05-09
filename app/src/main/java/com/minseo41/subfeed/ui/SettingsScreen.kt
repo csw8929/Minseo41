@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.minseo41.subfeed.data.refresh.RefreshPrefs
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -27,6 +28,8 @@ fun SettingsScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val channelCount by viewModel.channelCount.collectAsState()
+    val lastFetchAtMs by viewModel.lastFetchAtMs.collectAsState()
+    val failedFetchCount by viewModel.failedFetchCount.collectAsState()
     val context = LocalContext.current
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -173,6 +176,34 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            Text("구독 갱신", style = MaterialTheme.typography.titleMedium)
+
+            Text("갱신 간격 (최소값 — 단말 Doze 상태에서는 더 길어질 수 있음)", style = MaterialTheme.typography.bodyMedium)
+            RefreshIntervalRow(
+                selected = uiState.refreshIntervalHours,
+                onSelect = { viewModel.setRefreshIntervalHours(it) },
+            )
+
+            Text(
+                text = formatLastFetch(lastFetchAtMs),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (failedFetchCount > 0) {
+                Text(
+                    "${failedFetchCount}개 채널 갱신 실패",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            OutlinedButton(
+                onClick = { viewModel.refreshNow() },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("지금 새로고침")
+            }
+
+            HorizontalDivider()
+
             Text("채널 관리", style = MaterialTheme.typography.titleMedium)
 
             Text(
@@ -236,3 +267,33 @@ private fun CaptionScaleRow(selected: Float, onSelect: (Float) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RefreshIntervalRow(selected: Int, onSelect: (Int) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        RefreshPrefs.INTERVAL_OPTIONS.forEach { hours ->
+            FilterChip(
+                selected = selected == hours,
+                onClick = { onSelect(hours) },
+                label = { Text("${hours}시간") },
+            )
+        }
+    }
+}
+
+private fun formatLastFetch(atMs: Long?): String {
+    if (atMs == null || atMs <= 0L) return "마지막 갱신: 아직 없음"
+    val diffMs = System.currentTimeMillis() - atMs
+    if (diffMs < 0L) return "마지막 갱신: 방금 전"
+    val mins = diffMs / 60_000L
+    return when {
+        mins < 1L -> "마지막 갱신: 방금 전"
+        mins < 60L -> "마지막 갱신: ${mins}분 전"
+        mins < 60L * 24L -> "마지막 갱신: ${mins / 60L}시간 전"
+        else -> "마지막 갱신: ${mins / (60L * 24L)}일 전"
+    }
+}

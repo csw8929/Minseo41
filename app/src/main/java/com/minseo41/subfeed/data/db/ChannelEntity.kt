@@ -10,4 +10,7 @@ data class ChannelEntity(
     val windowDays: Int,
     val maxCount: Int,
     val sortOrder: Int,
+    val lastFetchAtMs: Long? = null,
+    val lastFetchOk: Boolean? = null,
+    val lastFetchError: String? = null,
 )

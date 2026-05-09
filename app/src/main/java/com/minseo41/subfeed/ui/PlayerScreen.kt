@@ -156,6 +156,9 @@ fun PlayerScreen(
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 isPlayingState = isPlaying
             }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED) onBack()
+            }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 android.util.Log.e("SubFeedPlayer", "onPlayerError ${error.errorCodeName}: ${error.message}", error)
                 viewModel.setPlaybackError(friendlyPlaybackMessage(error))
@@ -170,10 +173,28 @@ fun PlayerScreen(
                     }
                     .filter { it > 0 }
                 viewModel.updateAvailableQualities(heights)
+                tracks.groups
+                    .filter { it.type == C.TRACK_TYPE_VIDEO }
+                    .forEach { group ->
+                        for (i in 0 until group.length) {
+                            if (group.isTrackSelected(i)) {
+                                val f = group.getTrackFormat(i)
+                                val bitrate = if (f.bitrate != androidx.media3.common.Format.NO_VALUE) f.bitrate else f.averageBitrate
+                                android.util.Log.d(
+                                    "SubFeedPlayer",
+                                    "selected video track height=${f.height} bitrate=${bitrate} codecs=${f.codecs}",
+                                )
+                            }
+                        }
+                    }
                 // 새 영상 진입 시 사용자의 화질 선택을 새 트랙에도 재적용
                 applyQualitySelection(controller, viewModel.uiState.value.selectedMaxHeight)
             }
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                android.util.Log.d(
+                    "SubFeedPlayer",
+                    "videoSize ${videoSize.width}x${videoSize.height}",
+                )
                 viewModel.updateCurrentVideoHeight(videoSize.height)
             }
         }

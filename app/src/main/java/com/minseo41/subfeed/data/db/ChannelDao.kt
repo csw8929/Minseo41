@@ -30,4 +30,28 @@ interface ChannelDao {
 
     @Query("SELECT COUNT(*) FROM channels")
     suspend fun count(): Int
+
+    @Query(
+        """
+        UPDATE channels
+        SET lastFetchAtMs = :atMs, lastFetchOk = 1, lastFetchError = NULL
+        WHERE id = :id
+        """
+    )
+    suspend fun markFetchSuccess(id: String, atMs: Long)
+
+    @Query(
+        """
+        UPDATE channels
+        SET lastFetchOk = 0, lastFetchError = :err
+        WHERE id = :id
+        """
+    )
+    suspend fun markFetchFailure(id: String, err: String?)
+
+    @Query("SELECT MAX(lastFetchAtMs) FROM channels")
+    fun observeLastFetchAtMs(): Flow<Long?>
+
+    @Query("SELECT COUNT(*) FROM channels WHERE lastFetchOk = 0")
+    fun observeFailedFetchCount(): Flow<Int>
 }

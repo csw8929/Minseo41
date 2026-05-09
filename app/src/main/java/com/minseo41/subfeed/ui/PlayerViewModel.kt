@@ -11,6 +11,7 @@ import com.minseo41.subfeed.data.StreamInfo
 import com.minseo41.subfeed.data.SyncRepo
 import com.minseo41.subfeed.data.TimedTextToSrt
 import com.minseo41.subfeed.data.VideoExtractor
+import com.minseo41.subfeed.data.db.VideoDao
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,7 @@ class PlayerViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val extractor: VideoExtractor,
     private val syncRepo: SyncRepo,
+    private val videoDao: VideoDao,
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -68,6 +70,8 @@ class PlayerViewModel @Inject constructor(
             isFullscreen = prefs.getBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, false),
         )
         viewModelScope.launch {
+            runCatching { videoDao.markRead(videoId) }
+                .onFailure { Log.w(TAG, "markRead 실패: videoId=$videoId", it) }
             val savedPosition = runCatching { syncRepo.getPosition(videoId) }
                 .onFailure { Log.e(TAG, "loadVideo getPosition failed", it) }
                 .getOrNull()?.positionMs ?: 0L
@@ -86,6 +90,9 @@ class PlayerViewModel @Inject constructor(
                         )
                     }
                     if (savedPosition > 0L) startBannerCountdown()
+                    if (info.durationSeconds > 0L) {
+                        runCatching { videoDao.updateDurationIfZero(videoId, info.durationSeconds) }
+                    }
                 }
                 .onFailure { e ->
                     Log.e(TAG, "extractor 실패: videoId=$videoId", e)
