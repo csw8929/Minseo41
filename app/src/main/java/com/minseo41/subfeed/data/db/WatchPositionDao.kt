@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface WatchPositionDao {
@@ -13,6 +14,9 @@ interface WatchPositionDao {
 
     @Query("SELECT * FROM watch_positions")
     suspend fun getAll(): List<WatchPositionEntity>
+
+    @Query("SELECT * FROM watch_positions")
+    fun observeAll(): Flow<List<WatchPositionEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(position: WatchPositionEntity)

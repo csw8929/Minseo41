@@ -10,4 +10,5 @@ data class CaptionTrack(
 data class StreamInfo(
     val streamUrl: String,
     val captionTracks: List<CaptionTrack>,
+    val durationSeconds: Long = 0L,
 )

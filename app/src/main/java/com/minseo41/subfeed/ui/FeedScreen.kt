@@ -1,9 +1,11 @@
 package com.minseo41.subfeed.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -15,6 +17,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,6 +28,8 @@ import com.minseo41.subfeed.model.VideoItem
 import java.time.Duration
 
 private val FavoriteYellow = Color(0xFFFFD700)
+private val UnreadBlue = Color(0xFF4FC3F7)
+private val ProgressRed = Color(0xFFFF0000)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,7 +50,7 @@ fun FeedScreen(
                     title = { Text("SubFeed") },
                     actions = {
                         if (selectedTab == FeedTab.Today) {
-                            IconButton(onClick = { viewModel.loadTodayFeed() }) {
+                            IconButton(onClick = { viewModel.refreshNow() }) {
                                 Icon(Icons.Default.Refresh, contentDescription = "새로고침")
                             }
                         }
@@ -80,7 +85,7 @@ fun FeedScreen(
                     favoriteIds = favoriteIds,
                     onVideoClick = onVideoClick,
                     onToggleFavorite = viewModel::toggleFavorite,
-                    onRetry = { viewModel.loadTodayFeed() },
+                    onRetry = { viewModel.refreshNow() },
                 )
                 FeedTab.Favorites -> FavoritesContent(
                     favorites = favorites,
@@ -104,14 +109,14 @@ private fun TodayContent(
         is FeedUiState.Loading -> Box(Modifier.fillMaxSize()) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }
-        is FeedUiState.Error -> Column(
+        is FeedUiState.Empty -> Column(
             Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(state.message, style = MaterialTheme.typography.bodyLarge)
             Spacer(Modifier.height(12.dp))
-            Button(onClick = onRetry) { Text("다시 시도") }
+            Button(onClick = onRetry) { Text("새로고침") }
         }
         is FeedUiState.Success -> LazyColumn {
             items(state.videos, key = { it.id }) { video ->
@@ -172,14 +177,40 @@ private fun VideoRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AsyncImage(
-            model = video.thumbnailUrl,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
+        Box(modifier = Modifier.size(8.dp)) {
+            if (video.isUnread) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(UnreadBlue)
+                        .align(Alignment.Center),
+                )
+            }
+        }
+        Box(
             modifier = Modifier
                 .width(120.dp)
                 .height(68.dp),
-        )
+        ) {
+            AsyncImage(
+                model = video.thumbnailUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            video.watchFraction?.let { fraction ->
+                LinearProgressIndicator(
+                    progress = { fraction },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = ProgressRed,
+                    trackColor = Color(0x66000000),
+                )
+            }
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = video.title,

@@ -7,6 +7,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.AuthRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
+import com.minseo41.subfeed.data.db.ChannelDao
+import com.minseo41.subfeed.data.refresh.RefreshPrefs
+import com.minseo41.subfeed.data.refresh.RefreshScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +29,7 @@ data class SettingsUiState(
     val captionScale: Float = 1.0f,
     val orientationLocked: Boolean = false,
     val defaultFullscreen: Boolean = false,
+    val refreshIntervalHours: Int = RefreshPrefs.DEFAULT_INTERVAL_HOURS,
 )
 
 @HiltViewModel
@@ -33,6 +37,9 @@ class SettingsViewModel @Inject constructor(
     @ApplicationContext context: Context,
     private val subscriptionRepo: SubscriptionRepo,
     private val authRepo: AuthRepo,
+    private val refreshPrefs: RefreshPrefs,
+    private val refreshScheduler: RefreshScheduler,
+    channelDao: ChannelDao,
 ) : ViewModel() {
 
     private val playerPrefs = context.getSharedPreferences(PlayerPrefs.NAME, Context.MODE_PRIVATE)
@@ -44,6 +51,12 @@ class SettingsViewModel @Inject constructor(
         .map { it.size }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    val lastFetchAtMs: StateFlow<Long?> = channelDao.observeLastFetchAtMs()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val failedFetchCount: StateFlow<Int> = channelDao.observeFailedFetchCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
     init {
         _uiState.update {
             it.copy(
@@ -51,6 +64,7 @@ class SettingsViewModel @Inject constructor(
                 captionScale = playerPrefs.getFloat(PlayerPrefs.KEY_CAPTION_SCALE, 1.0f),
                 orientationLocked = playerPrefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
                 defaultFullscreen = playerPrefs.getBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, false),
+                refreshIntervalHours = refreshPrefs.intervalHours,
             )
         }
         viewModelScope.launch {
@@ -58,6 +72,17 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(signedInEmail = user?.email) }
             }
         }
+    }
+
+    fun setRefreshIntervalHours(hours: Int) {
+        refreshPrefs.intervalHours = hours
+        _uiState.update { it.copy(refreshIntervalHours = hours) }
+        refreshScheduler.schedulePeriodic(replaceExisting = true)
+    }
+
+    fun refreshNow() {
+        refreshScheduler.triggerNow()
+        _uiState.update { it.copy(message = "갱신을 시작했습니다") }
     }
 
     fun setDefaultMaxHeight(height: Int) {
