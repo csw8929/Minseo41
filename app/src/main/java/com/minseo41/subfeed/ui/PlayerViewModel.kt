@@ -95,6 +95,15 @@ class PlayerViewModel @Inject constructor(
     }
 
     fun setPlaybackError(message: String) {
+        // Service 의 ExoPlayer 가 영상 간 share 라 이전 영상 cleanup 의 error 가 새 PlayerScreen
+        // 의 listener 에 late-broadcast 될 수 있다. extractor 가 끝나 streamInfo 가 set 되기 전엔
+        // 이 PlayerScreen 이 setMediaItem/prepare 도 호출 안 한 상태이므로, 그 시점의 onPlayerError
+        // 는 무조건 stale error → 무시. 그 후 진짜 prepare error 만 사용자에게 노출.
+        val current = _uiState.value
+        if (current.streamInfo == null) {
+            Log.d(TAG, "setPlaybackError before streamInfo set — ignored ($message)")
+            return
+        }
         _uiState.update { it.copy(error = message, isLoading = false) }
     }
 
