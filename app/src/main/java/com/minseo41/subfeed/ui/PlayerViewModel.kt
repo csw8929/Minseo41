@@ -40,6 +40,9 @@ data class PlayerUiState(
     val isInPipMode: Boolean = false,
     val selectedCaptionScale: Float = 1.0f,
     val orientationLocked: Boolean = false,
+    val videoTitle: String = "",
+    val channelName: String = "",
+    val thumbnailUrl: String = "",
 )
 
 @HiltViewModel
@@ -72,18 +75,32 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { videoDao.markRead(videoId) }
                 .onFailure { Log.w(TAG, "markRead 실패: videoId=$videoId", it) }
+            val video = runCatching { videoDao.getById(videoId) }.getOrNull()
+            video?.let { entity ->
+                _uiState.update {
+                    it.copy(
+                        videoTitle = entity.title,
+                        channelName = entity.channelName,
+                        thumbnailUrl = entity.thumbnailUrl,
+                    )
+                }
+            }
             val savedPosition = runCatching { syncRepo.getPosition(videoId) }
                 .onFailure { Log.e(TAG, "loadVideo getPosition failed", it) }
                 .getOrNull()?.positionMs ?: 0L
-            Log.d(TAG, "loadVideo: videoId=$videoId, savedPosition=$savedPosition")
+            // 끝에서 5초 이내면 다음 시청은 처음부터 시작.
+            val nearEnd = video != null && video.durationSeconds > 0L &&
+                savedPosition >= video.durationSeconds * 1000L - 5_000L
+            val resumePosition = if (nearEnd) 0L else savedPosition
+            Log.d(TAG, "loadVideo: videoId=$videoId, savedPosition=$savedPosition, resumePosition=$resumePosition, nearEnd=$nearEnd")
             runCatching { extractor.getStreamInfo(videoId) }
                 .onSuccess { info ->
                     val isHls = info.streamUrl.startsWith("hls:")
                     _uiState.update {
                         it.copy(
                             streamInfo = info,
-                            resumePositionMs = savedPosition,
-                            showResumeBanner = savedPosition > 0L,
+                            resumePositionMs = resumePosition,
+                            showResumeBanner = resumePosition > 0L,
                             isHlsStream = isHls,
                             isLoading = false,
                             error = null,
@@ -137,6 +154,7 @@ class PlayerViewModel @Inject constructor(
 
     // 30초 debounce — 재생 중 주기적으로 호출. ViewModel이 살아있는 동안만 의미 있으니 viewModelScope 사용.
     fun onPositionChanged(positionMs: Long) {
+        if (positionMs <= 0L) return  // 시작 직후의 0 saves는 의미 없음.
         val hadPending = saveJob?.isActive == true
         saveJob?.cancel()
         Log.d(TAG, "onPositionChanged defer scheduled (30s) — videoId=$currentVideoId, positionMs=$positionMs, deferredPrev=$hadPending")
@@ -148,8 +166,13 @@ class PlayerViewModel @Inject constructor(
     }
 
     // 화면 이탈 시 즉시 저장 — 이 시점엔 ViewModel이 곧 cleared 상태이므로 detached scope로 위임.
+    // position == 0 일 땐 저장 skip — "열기만 하고 안 본 채 닫기" 시 이전 '끝까지 봤다' 표식을 보존.
     fun savePositionNow(positionMs: Long) {
         saveJob?.cancel()
+        if (positionMs <= 0L) {
+            Log.d(TAG, "savePositionNow skipped (positionMs=$positionMs): videoId=$currentVideoId")
+            return
+        }
         Log.d(TAG, "savePositionNow: videoId=$currentVideoId, positionMs=$positionMs")
         syncRepo.savePositionDetached(currentVideoId, positionMs)
     }
