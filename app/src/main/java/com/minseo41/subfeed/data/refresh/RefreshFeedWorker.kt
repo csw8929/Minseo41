@@ -11,6 +11,7 @@ import com.minseo41.subfeed.data.db.ChannelEntity
 import com.minseo41.subfeed.data.db.VideoDao
 import com.minseo41.subfeed.data.db.VideoEntity
 import com.minseo41.subfeed.model.SubscribedChannel
+import androidx.work.workDataOf
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.async
@@ -26,6 +27,7 @@ class RefreshFeedWorker @AssistedInject constructor(
     private val channelDao: ChannelDao,
     private val videoDao: VideoDao,
     private val extractor: VideoExtractor,
+    private val refreshPrefs: RefreshPrefs,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result = coroutineScope {
@@ -37,19 +39,23 @@ class RefreshFeedWorker @AssistedInject constructor(
         val now = System.currentTimeMillis()
         val today = LocalDate.now(ZoneId.systemDefault())
 
-        channels.map { channel ->
+        val results = channels.map { channel ->
             async { refreshChannel(channel, now, today) }
         }.awaitAll()
 
-        Result.success()
+        val successCount = results.count { it }
+        refreshPrefs.saveLog(RefreshLogEntry(now, channels.size, successCount))
+        Log.d(TAG, "refresh done: $successCount/${channels.size} channels")
+
+        Result.success(workDataOf("ch" to channels.size, "ok" to successCount))
     }
 
     private suspend fun refreshChannel(
         channel: ChannelEntity,
         nowMs: Long,
         today: LocalDate,
-    ) {
-        runCatching {
+    ): Boolean {
+        return runCatching {
             val raw = extractor.getChannelFeed(SubscribedChannel.rssUrlFromId(channel.id))
             val cutoffDate = today.minusDays((channel.windowDays - 1).coerceAtLeast(0).toLong())
             val cutoffMs = cutoffDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -79,7 +85,7 @@ class RefreshFeedWorker @AssistedInject constructor(
         }.onFailure { e ->
             Log.w(TAG, "refresh failed for channel=${channel.id} (${channel.name})", e)
             channelDao.markFetchFailure(channel.id, e.message ?: e::class.java.simpleName)
-        }
+        }.isSuccess
     }
 
     companion object {

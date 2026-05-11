@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.text.style.TextOverflow
@@ -16,6 +18,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.minseo41.subfeed.data.refresh.RefreshLogEntry
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.minseo41.subfeed.data.refresh.RefreshPrefs
 
@@ -30,6 +37,8 @@ fun SettingsScreen(
     val channelCount by viewModel.channelCount.collectAsState()
     val lastFetchAtMs by viewModel.lastFetchAtMs.collectAsState()
     val failedFetchCount by viewModel.failedFetchCount.collectAsState()
+    val refreshLogs by viewModel.refreshLogs.collectAsState()
+    var showLogDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -195,11 +204,32 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            OutlinedButton(
-                onClick = { viewModel.refreshNow() },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("지금 새로고침")
+                OutlinedButton(
+                    onClick = { viewModel.refreshNow() },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("지금 새로고침")
+                }
+                OutlinedButton(
+                    onClick = {
+                        viewModel.loadRefreshLogs()
+                        showLogDialog = true
+                    },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("로그보기")
+                }
+            }
+
+            if (showLogDialog) {
+                RefreshLogDialog(
+                    logs = refreshLogs,
+                    onDismiss = { showLogDialog = false },
+                )
             }
 
             HorizontalDivider()
@@ -279,10 +309,40 @@ private fun RefreshIntervalRow(selected: Int, onSelect: (Int) -> Unit) {
             FilterChip(
                 selected = selected == hours,
                 onClick = { onSelect(hours) },
-                label = { Text("${hours}시간") },
+                label = { Text(if (hours == 0) "안함" else "${hours}시간") },
             )
         }
     }
+}
+
+@Composable
+private fun RefreshLogDialog(logs: List<RefreshLogEntry>, onDismiss: () -> Unit) {
+    val formatter = remember { DateTimeFormatter.ofPattern("MM/dd HH:mm") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("갱신 로그") },
+        text = {
+            if (logs.isEmpty()) {
+                Text("아직 갱신 기록이 없습니다.")
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(logs) { entry ->
+                        val time = LocalDateTime.ofInstant(
+                            Instant.ofEpochMilli(entry.timestampMs),
+                            ZoneId.systemDefault(),
+                        ).format(formatter)
+                        Text(
+                            "$time  |  ${entry.successCount}/${entry.channelCount}개 채널",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("닫기") }
+        },
+    )
 }
 
 private fun formatLastFetch(atMs: Long?): String {
