@@ -7,8 +7,10 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,6 +23,10 @@ class RefreshScheduler @Inject constructor(
     private val workManager: WorkManager get() = WorkManager.getInstance(context)
 
     fun schedulePeriodic(replaceExisting: Boolean = false) {
+        if (refreshPrefs.intervalHours == 0) {
+            workManager.cancelUniqueWork(PERIODIC_WORK_NAME)
+            return
+        }
         val request = PeriodicWorkRequestBuilder<RefreshFeedWorker>(
             refreshPrefs.intervalHours.toLong(),
             TimeUnit.HOURS,
@@ -46,6 +52,9 @@ class RefreshScheduler @Inject constructor(
             .build()
         workManager.enqueueUniqueWork(MANUAL_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
     }
+
+    fun observeManualWork(): Flow<List<WorkInfo>> =
+        workManager.getWorkInfosForUniqueWorkFlow(MANUAL_WORK_NAME)
 
     companion object {
         const val PERIODIC_WORK_NAME = "subfeed_refresh_periodic"

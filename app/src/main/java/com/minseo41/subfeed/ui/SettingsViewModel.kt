@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.AuthRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
 import com.minseo41.subfeed.data.db.ChannelDao
+import androidx.work.WorkInfo
+import com.minseo41.subfeed.data.refresh.RefreshLogEntry
 import com.minseo41.subfeed.data.refresh.RefreshPrefs
 import com.minseo41.subfeed.data.refresh.RefreshScheduler
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -15,6 +17,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -57,6 +61,13 @@ class SettingsViewModel @Inject constructor(
     val failedFetchCount: StateFlow<Int> = channelDao.observeFailedFetchCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
+    private val _refreshLogs = MutableStateFlow(refreshPrefs.getLogs())
+    val refreshLogs: StateFlow<List<RefreshLogEntry>> = _refreshLogs
+
+    fun loadRefreshLogs() {
+        _refreshLogs.value = refreshPrefs.getLogs()
+    }
+
     init {
         _uiState.update {
             it.copy(
@@ -82,7 +93,22 @@ class SettingsViewModel @Inject constructor(
 
     fun refreshNow() {
         refreshScheduler.triggerNow()
-        _uiState.update { it.copy(message = "갱신을 시작했습니다") }
+        _uiState.update { it.copy(message = "갱신 중...") }
+        viewModelScope.launch {
+            val infos = refreshScheduler.observeManualWork()
+                .filter { it.isNotEmpty() }
+                .first { list -> list.first().state.isFinished }
+            val info = infos.first()
+            val msg = if (info.state == WorkInfo.State.SUCCEEDED) {
+                val ch = info.outputData.getInt("ch", 0)
+                val ok = info.outputData.getInt("ok", 0)
+                "갱신 완료: ${ok}/${ch}개 채널 성공"
+            } else {
+                "갱신 실패"
+            }
+            _uiState.update { it.copy(message = msg) }
+            loadRefreshLogs()
+        }
     }
 
     fun setDefaultMaxHeight(height: Int) {

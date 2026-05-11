@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.os.Build
 import android.util.Rational
 import android.view.WindowManager
@@ -41,6 +42,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -245,19 +247,27 @@ fun PlayerScreen(
             controller.currentPosition.takeIf { it > 0L } ?: uiState.resumePositionMs
         }
         val raw = info.streamUrl
+        val metadata = MediaMetadata.Builder()
+            .setTitle(uiState.videoTitle.takeIf { it.isNotEmpty() })
+            .setArtist(uiState.channelName.takeIf { it.isNotEmpty() })
+            .setArtworkUri(uiState.thumbnailUrl.takeIf { it.isNotEmpty() }?.let { Uri.parse(it) })
+            .build()
         // mediaId에 videoId를 박아 service가 deep-link PendingIntent 갱신에 사용.
         val builder = when {
             raw.startsWith("hls:") -> MediaItem.Builder()
                 .setMediaId(videoId)
                 .setUri(raw.removePrefix("hls:"))
                 .setMimeType(MimeTypes.APPLICATION_M3U8)
+                .setMediaMetadata(metadata)
             raw.startsWith("dash:") -> MediaItem.Builder()
                 .setMediaId(videoId)
                 .setUri(raw.removePrefix("dash:"))
                 .setMimeType(MimeTypes.APPLICATION_MPD)
+                .setMediaMetadata(metadata)
             else -> MediaItem.Builder()
                 .setMediaId(videoId)
                 .setUri(raw)
+                .setMediaMetadata(metadata)
         }
         // setMediaItem 후 seekTo 패턴은 seekbar가 0으로 갔다가 saved로 점프하는 깜빡임을 만든다.
         // startPositionMs를 직접 넘겨 처음부터 그 위치에서 prepare하도록 한다.
@@ -311,12 +321,20 @@ fun PlayerScreen(
             } else {
                 ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
+            // fullscreen 시 BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE로 설정된 상태가 남아있으면
+            // show() 후에도 자동으로 다시 숨어버린다. BEHAVIOR_DEFAULT로 리셋해야 영구 표시.
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            // enableEdgeToEdge()로 status bar가 투명해지므로 검정 배경 위에서
+            // 아이콘이 보이도록 흰색 아이콘(light=false)으로 전환.
+            controller.isAppearanceLightStatusBars = false
             controller.show(WindowInsetsCompat.Type.systemBars())
         }
         onDispose {
             act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-            WindowInsetsControllerCompat(window, window.decorView)
-                .show(WindowInsetsCompat.Type.systemBars())
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                isAppearanceLightStatusBars = true  // 앱 기본 테마(라이트) 복원
+                show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 

@@ -1,5 +1,10 @@
 package com.minseo41.subfeed.ui
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,11 +18,14 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,8 +50,25 @@ fun FeedScreen(
     val selectedTab by viewModel.selectedTab.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
     val favoriteIds by viewModel.favoriteIds.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val refreshMessage by viewModel.refreshMessage.collectAsState()
+    val infiniteTransition = rememberInfiniteTransition(label = "refresh")
+    val spinAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(800, easing = LinearEasing)),
+        label = "spinAngle",
+    )
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(refreshMessage) {
+        val msg = refreshMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(msg)
+        viewModel.clearRefreshMessage()
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
                 TopAppBar(
@@ -51,7 +76,11 @@ fun FeedScreen(
                     actions = {
                         if (selectedTab == FeedTab.Today) {
                             IconButton(onClick = { viewModel.refreshNow() }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "새로고침")
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "새로고침",
+                                    modifier = Modifier.rotate(if (isRefreshing) spinAngle else 0f),
+                                )
                             }
                         }
                         IconButton(onClick = onSettingsClick) {

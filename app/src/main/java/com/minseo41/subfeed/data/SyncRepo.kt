@@ -43,20 +43,16 @@ class SyncRepo @Inject constructor(
         detachedScope.launch { savePosition(videoId, positionMs) }
     }
 
+    // 충돌 해소: "최신 updatedAt이 이긴다" — 큰 값 우선이 아닌 시각 우선.
+    // 재시청으로 작은 값을 써도 정상 반영되며, 다른 기기가 더 최신 상태일 땐 덮어쓰지 않음.
     suspend fun savePosition(videoId: String, positionMs: Long) {
         val now = System.currentTimeMillis()
 
-        val localExisting = runCatching { watchPositionDao.get(videoId) }
-            .onFailure { Log.e(TAG, "savePosition local read failed", it) }
-            .getOrNull()
-        if (positionMs > (localExisting?.positionMs ?: 0L)) {
-            runCatching {
-                watchPositionDao.upsert(WatchPositionEntity(videoId, positionMs, now))
-                pruneIfOver()
-            }.onFailure { Log.e(TAG, "savePosition local write failed", it) }
-        } else {
-            Log.d(TAG, "savePosition local skipped — new=$positionMs <= local=${localExisting?.positionMs}")
-        }
+        // 로컬은 이 기기의 가장 최근 의도 — 항상 덮어씀.
+        runCatching {
+            watchPositionDao.upsert(WatchPositionEntity(videoId, positionMs, now))
+            pruneIfOver()
+        }.onFailure { Log.e(TAG, "savePosition local write failed", it) }
 
         val u = uid
         if (u == null) {
@@ -67,8 +63,9 @@ class SyncRepo @Inject constructor(
         val remoteExisting = runCatching { fetchFromFirestore(u, videoId) }
             .onFailure { Log.e(TAG, "savePosition Firestore read failed", it) }
             .getOrNull()
-        if (positionMs <= (remoteExisting?.positionMs ?: 0L)) {
-            Log.d(TAG, "savePosition Firestore skipped — new=$positionMs <= remote=${remoteExisting?.positionMs}")
+        val remoteUpdatedAtMs = remoteExisting?.updatedAt?.toDate()?.time ?: 0L
+        if (now <= remoteUpdatedAtMs) {
+            Log.d(TAG, "savePosition Firestore skipped — now=$now <= remote updatedAt=$remoteUpdatedAtMs")
             return
         }
 
@@ -93,31 +90,47 @@ class SyncRepo @Inject constructor(
     }
 
     suspend fun getPosition(videoId: String): WatchPosition? {
-        val u = uid
-        if (u != null) {
-            val remote = runCatching { fetchFromFirestore(u, videoId) }
-                .onFailure { Log.e(TAG, "getPosition Firestore read failed (fallback to local)", it) }
-                .getOrNull()
-            if (remote != null) {
-                runCatching {
-                    watchPositionDao.upsert(
-                        WatchPositionEntity(videoId, remote.positionMs, System.currentTimeMillis())
-                    )
-                }.onFailure { Log.e(TAG, "getPosition local cache update failed", it) }
-                Log.d(TAG, "getPosition Firestore ok: videoId=$videoId, positionMs=${remote.positionMs}")
-                return remote
-            }
-        }
-
         val local = runCatching { watchPositionDao.get(videoId) }
             .onFailure { Log.e(TAG, "getPosition local read failed", it) }
-            .getOrNull() ?: return null
-        Log.d(TAG, "getPosition local ok: videoId=$videoId, positionMs=${local.positionMs}")
-        return WatchPosition(
-            videoId = local.videoId,
-            positionMs = local.positionMs,
-            updatedAt = Timestamp(local.updatedAt / 1000, 0),
-        )
+            .getOrNull()
+        val localAsModel = local?.let {
+            WatchPosition(
+                videoId = it.videoId,
+                positionMs = it.positionMs,
+                updatedAt = Timestamp(it.updatedAt / 1000, 0),
+            )
+        }
+
+        val u = uid
+        if (u == null) {
+            if (localAsModel != null) {
+                Log.d(TAG, "getPosition local-only (uid=null): videoId=$videoId, positionMs=${local!!.positionMs}")
+            }
+            return localAsModel
+        }
+
+        val remote = runCatching { fetchFromFirestore(u, videoId) }
+            .onFailure { Log.e(TAG, "getPosition Firestore read failed (fallback to local)", it) }
+            .getOrNull()
+
+        if (remote == null) return localAsModel
+
+        // 최신 updatedAt이 이긴다. 로컬이 더 최신이면 로컬 사용, 아니면 Firestore + 로컬 캐시 갱신.
+        val remoteUpdatedAtMs = remote.updatedAt.toDate().time
+        val localUpdatedAtMs = local?.updatedAt ?: -1L
+
+        return if (localUpdatedAtMs > remoteUpdatedAtMs) {
+            Log.d(TAG, "getPosition: local newer — videoId=$videoId, local=$localUpdatedAtMs > remote=$remoteUpdatedAtMs")
+            localAsModel
+        } else {
+            Log.d(TAG, "getPosition: remote newer/tied — videoId=$videoId, remote=$remoteUpdatedAtMs >= local=$localUpdatedAtMs")
+            runCatching {
+                watchPositionDao.upsert(
+                    WatchPositionEntity(videoId, remote.positionMs, remoteUpdatedAtMs)
+                )
+            }.onFailure { Log.e(TAG, "getPosition local cache update failed", it) }
+            remote
+        }
     }
 
     private suspend fun fetchFromFirestore(uid: String, videoId: String): WatchPosition? {
@@ -155,7 +168,8 @@ class SyncRepo @Inject constructor(
         for (local in locals) {
             runCatching {
                 val remote = fetchFromFirestore(u, local.videoId)
-                if (local.positionMs > (remote?.positionMs ?: 0L)) {
+                val remoteUpdatedAtMs = remote?.updatedAt?.toDate()?.time ?: 0L
+                if (local.updatedAt > remoteUpdatedAtMs) {
                     firestore.collection("users")
                         .document(u)
                         .collection("positions")
