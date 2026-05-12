@@ -99,6 +99,10 @@ feed  →  settings
 - `google-services.json` 파일이 필요하나 VCS에 없음 — Firebase 콘솔에서 별도 발급 필요.
 - YouTube ToS 위반 가능성 인지하고 개인 사용 전제로 개발 중.
 
+## TODO
+
+- [ ] **챕터 디버그 로그 제거** — `data/NewPipeVideoExtractor.kt` 의 `Log.d("SubFeedChapters", …)` 호출들 (getStreamInfo 블록 + `parseChapters` 함수 내부). 챕터 기능 안정화 확인 후 삭제. (2026-05-12 추가)
+
 ---
 
 ## Skill routing

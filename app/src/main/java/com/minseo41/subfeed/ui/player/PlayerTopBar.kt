@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.ClosedCaptionDisabled
 import androidx.compose.material.icons.filled.PictureInPicture
@@ -35,9 +36,11 @@ fun PlayerTopBar(
     qualityEnabled: Boolean,
     captionEnabled: Boolean,
     orientationLocked: Boolean,
+    chaptersAvailable: Boolean,
     onBackClick: () -> Unit,
     onQualityClick: () -> Unit,
     onCaptionClick: () -> Unit,
+    onChapterClick: () -> Unit,
     onPipClick: () -> Unit,
     onToggleOrientationLock: () -> Unit,
     modifier: Modifier = Modifier,
@@ -81,6 +84,15 @@ fun PlayerTopBar(
                 contentDescription = "자막",
                 tint = Color.White,
             )
+        }
+        if (chaptersAvailable) {
+            IconButton(onClick = onChapterClick, modifier = Modifier.size(48.dp)) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                    contentDescription = "챕터",
+                    tint = Color.White,
+                )
+            }
         }
         IconButton(onClick = onToggleOrientationLock, modifier = Modifier.size(48.dp)) {
             Icon(

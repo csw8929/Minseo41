@@ -54,6 +54,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.minseo41.subfeed.service.SubFeedMediaSessionService
 import com.minseo41.subfeed.ui.player.CaptionMenu
+import com.minseo41.subfeed.ui.player.ChapterMenu
 import com.minseo41.subfeed.ui.player.DoubleTapSkipOverlay
 import com.minseo41.subfeed.ui.player.PlayerBottomBar
 import com.minseo41.subfeed.ui.player.PlayerControls
@@ -121,6 +122,7 @@ fun PlayerScreen(
     var controlsVisible by remember { mutableStateOf(true) }
     var qualityMenuOpen by remember { mutableStateOf(false) }
     var captionMenuOpen by remember { mutableStateOf(false) }
+    var chapterMenuOpen by remember { mutableStateOf(false) }
     // seek throttle — 드래그 중 매 픽셀마다 seekTo 호출하면 HLS chunk fetch 비용이 큼.
     // 50ms 간격으로만 실제 seek, 그 사이 변경은 슬라이더 thumb 위치만 업데이트.
     var lastSeekAtMs by remember { mutableStateOf(0L) }
@@ -491,6 +493,7 @@ fun PlayerScreen(
                         qualityEnabled = uiState.isHlsStream,
                         captionEnabled = uiState.selectedCaptionLanguage != null,
                         orientationLocked = uiState.orientationLocked,
+                        chaptersAvailable = (uiState.streamInfo?.chapters?.isNotEmpty() == true),
                         onBackClick = {
                             viewModel.savePositionNow(controller.currentPosition)
                             if (uiState.isFullscreen) {
@@ -503,6 +506,7 @@ fun PlayerScreen(
                         },
                         onQualityClick = { qualityMenuOpen = true },
                         onCaptionClick = { captionMenuOpen = true },
+                        onChapterClick = { chapterMenuOpen = true },
                         onPipClick = { tryEnterPip(activity) },
                         onToggleOrientationLock = {
                             // OFF→ON 진입 직전에 현재 orientation 을 동기 캡처.
@@ -608,6 +612,19 @@ fun PlayerScreen(
                     captionMenuOpen = false
                 },
                 onDismiss = { captionMenuOpen = false },
+            )
+        }
+
+        if (chapterMenuOpen) {
+            val chapters = uiState.streamInfo?.chapters.orEmpty()
+            ChapterMenu(
+                chapters = chapters,
+                currentPositionMs = currentPositionMs,
+                onSelect = { ch ->
+                    mediaController?.seekTo(ch.timeMs)
+                    chapterMenuOpen = false
+                },
+                onDismiss = { chapterMenuOpen = false },
             )
         }
     }
