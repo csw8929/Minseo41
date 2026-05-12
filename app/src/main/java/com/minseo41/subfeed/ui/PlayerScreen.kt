@@ -19,13 +19,16 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -513,6 +516,27 @@ fun PlayerScreen(
             }
         }
 
+        // 비전체화면 모드에서 컨트롤이 숨겨졌을 때도 좌상단에 제목 노출.
+        // 컨트롤이 보일 때는 PlayerTopBar 가 같은 제목을 표시하므로 중복 회피.
+        if (!uiState.isFullscreen && !uiState.isInPipMode && !controlsVisible && uiState.videoTitle.isNotEmpty()) {
+            Text(
+                text = uiState.videoTitle,
+                color = Color.White,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .widthIn(max = 280.dp)
+                    .background(
+                        Color.Black.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(4.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+        }
+
         // 더블탭 핫존 — 에러 상태에선 비활성 (메시지/버튼 클릭을 가리지 않게)
         val controller = mediaController
         if (controller != null && !uiState.isInPipMode && uiState.error == null) {
@@ -542,7 +566,7 @@ fun PlayerScreen(
             ) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     PlayerTopBar(
-                        title = "재생 중",
+                        title = uiState.videoTitle.ifEmpty { "재생 중" },
                         qualityLabel = when {
                             uiState.selectedMaxHeight > 0 -> "${uiState.selectedMaxHeight}p"
                             uiState.currentVideoHeight > 0 -> "자동 ${uiState.currentVideoHeight}p"

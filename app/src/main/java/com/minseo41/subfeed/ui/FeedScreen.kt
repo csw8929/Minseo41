@@ -34,9 +34,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.minseo41.subfeed.model.VideoItem
 import java.time.Duration
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 private val FavoriteYellow = Color(0xFFFFD700)
 private val UnreadBlue = Color(0xFF4FC3F7)
+private val ChannelGreen = Color(0xFF81C784)
 private val ProgressRed = Color(0xFFFF0000)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -71,11 +76,27 @@ fun FeedScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             Column {
-                TopAppBar(
-                    title = { Text("SubFeed") },
-                    actions = {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .windowInsetsPadding(WindowInsets.statusBars)
+                            .height(40.dp)
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "SubFeed",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 12.dp),
+                        )
                         if (selectedTab == FeedTab.Today) {
-                            IconButton(onClick = { viewModel.refreshNow() }) {
+                            IconButton(
+                                onClick = { viewModel.refreshNow() },
+                                modifier = Modifier.size(40.dp),
+                            ) {
                                 Icon(
                                     Icons.Default.Refresh,
                                     contentDescription = "새로고침",
@@ -83,11 +104,14 @@ fun FeedScreen(
                                 )
                             }
                         }
-                        IconButton(onClick = onSettingsClick) {
+                        IconButton(
+                            onClick = onSettingsClick,
+                            modifier = Modifier.size(40.dp),
+                        ) {
                             Icon(Icons.Default.Settings, contentDescription = "설정")
                         }
                     }
-                )
+                }
                 TabRow(selectedTabIndex = selectedTab.ordinal) {
                     Tab(
                         selected = selectedTab == FeedTab.Today,
@@ -217,26 +241,38 @@ private fun VideoRow(
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .width(120.dp)
-                .height(68.dp),
+        Column(
+            modifier = Modifier.width(120.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            AsyncImage(
-                model = video.thumbnailUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-            video.watchFraction?.let { fraction ->
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(3.dp),
-                    color = ProgressRed,
-                    trackColor = Color(0x66000000),
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(68.dp),
+            ) {
+                AsyncImage(
+                    model = video.thumbnailUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                video.watchFraction?.let { fraction ->
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(3.dp),
+                        color = ProgressRed,
+                        trackColor = Color(0x66000000),
+                    )
+                }
+            }
+            if (video.uploadedAt > 0L) {
+                Text(
+                    text = formatUploadedAt(video.uploadedAt),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = UnreadBlue,
                 )
             }
         }
@@ -251,7 +287,7 @@ private fun VideoRow(
             Text(
                 text = video.channelName,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = ChannelGreen,
             )
             if (video.durationSeconds > 0L) {
                 Text(
@@ -277,4 +313,15 @@ private fun formatDuration(seconds: Long): String {
     val m = d.toMinutesPart()
     val s = d.toSecondsPart()
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
+private val UploadedAtFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MM/dd HH:mm")
+
+private fun formatUploadedAt(epochMillis: Long): String {
+    val dt = LocalDateTime.ofInstant(
+        Instant.ofEpochMilli(epochMillis),
+        ZoneId.systemDefault(),
+    )
+    return dt.format(UploadedAtFormatter)
 }
