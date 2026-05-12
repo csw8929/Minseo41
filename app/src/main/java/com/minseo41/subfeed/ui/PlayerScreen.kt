@@ -119,6 +119,16 @@ fun PlayerScreen(
     // 새 영상 진입 vs 같은 영상 내 자막 변경 구분 — 새 영상 진입 시 controller.currentPosition은
     // 이전 영상의 위치라 신뢰하면 안 됨.
     var lastPreparedVideoId by remember { mutableStateOf<String?>(null) }
+    // chunk 단계 403 (Shorts 등 YouTube PoToken 일시 거부) 자동 재시도 — 같은 stream URL 로
+    // 1초 대기 후 setMediaItem + prepare 재실행. 영상별 최대 2회.
+    var playbackRetryCount by remember { mutableStateOf(0) }
+    var retryTriggerAt by remember { mutableStateOf(0L) }
+    var lastHandledRetryAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(videoId) {
+        playbackRetryCount = 0
+        retryTriggerAt = 0L
+        lastHandledRetryAt = 0L
+    }
     var controlsVisible by remember { mutableStateOf(true) }
     var qualityMenuOpen by remember { mutableStateOf(false) }
     var captionMenuOpen by remember { mutableStateOf(false) }
@@ -162,9 +172,44 @@ fun PlayerScreen(
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) onBack()
+                if (playbackState == Player.STATE_READY && playbackRetryCount > 0 && lastHandledRetryAt > 0L) {
+                    android.util.Log.w(
+                        "SubFeedPlayer",
+                        "retry-403 SUCCESS after $playbackRetryCount attempts for videoId=$videoId",
+                    )
+                    lastHandledRetryAt = 0L
+                }
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                android.util.Log.e("SubFeedPlayer", "onPlayerError ${error.errorCodeName}: ${error.message}", error)
+                val info = viewModel.uiState.value.streamInfo
+                val urlHead = info?.streamUrl?.take(120)?.replace("\n", " ") ?: "<none>"
+                val isHls = info?.streamUrl?.startsWith("hls:") == true
+                val httpStatus = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode ?: -1
+                val httpUrl = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.dataSpec?.uri?.toString()?.take(160)
+                android.util.Log.e(
+                    "SubFeedPlayer",
+                    "onPlayerError code=${error.errorCode}(${error.errorCodeName}) msg=${error.message} " +
+                        "videoId=$videoId isHls=$isHls streamHead=$urlHead " +
+                        "httpStatus=$httpStatus httpUrl=$httpUrl " +
+                        "cause=${error.cause?.javaClass?.simpleName}: ${error.cause?.message?.take(200)}",
+                    error,
+                )
+                val retryable403 = error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS && httpStatus == 403
+                if (retryable403 && playbackRetryCount < 2) {
+                    playbackRetryCount++
+                    android.util.Log.w(
+                        "SubFeedPlayer",
+                        "retry-403 scheduling #$playbackRetryCount in 1s for videoId=$videoId (httpStatus=403)",
+                    )
+                    retryTriggerAt = System.currentTimeMillis()
+                    return
+                }
+                if (retryable403) {
+                    android.util.Log.w(
+                        "SubFeedPlayer",
+                        "retry-403 exhausted after $playbackRetryCount attempts — surfacing error for videoId=$videoId",
+                    )
+                }
                 viewModel.setPlaybackError(friendlyPlaybackMessage(error))
                 runCatching { controller.stop() }
                 runCatching { controller.clearMediaItems() }
@@ -238,9 +283,22 @@ fun PlayerScreen(
 
     // streamInfo 변경 시에만 MediaItem 재구성. 자막은 Compose 오버레이에서 직접 렌더링하므로
     // captionSrtUri 같은 키가 사라져 자막 toggle 시 영상이 검정으로 깜빡이지 않는다.
-    LaunchedEffect(mediaController, uiState.streamInfo) {
+    // 추가로 retryTriggerAt 변경 시에도 발동 — 403 chunk 에러 자동 재시도 path.
+    LaunchedEffect(mediaController, uiState.streamInfo, retryTriggerAt) {
         val controller = mediaController ?: return@LaunchedEffect
         val info = uiState.streamInfo ?: return@LaunchedEffect
+        val isRetryRun = retryTriggerAt > 0L && retryTriggerAt != lastHandledRetryAt
+        if (isRetryRun) {
+            android.util.Log.w(
+                "SubFeedPlayer",
+                "retry-403 waiting 1s before reprepare — count=$playbackRetryCount videoId=$videoId",
+            )
+            delay(1000L)
+            lastHandledRetryAt = retryTriggerAt
+            // 강제로 isNewVideo path 진입 → stop+clear+setMediaItem+prepare 풀스택 재실행.
+            lastPreparedVideoId = null
+            android.util.Log.w("SubFeedPlayer", "retry-403 executing reprepare for videoId=$videoId")
+        }
         val isNewVideo = videoId != lastPreparedVideoId
         // 새 영상 진입 시: controller.currentPosition은 이전 영상 위치라 무시. saved 위치만 사용.
         val savedPos = if (isNewVideo) {
