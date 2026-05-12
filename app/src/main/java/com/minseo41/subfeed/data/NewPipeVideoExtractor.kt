@@ -77,8 +77,10 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                 ),
             )
 
+            val clientNames = listOf("IOS", "ANDROID_VR", "TVHTML5_EMBED")
             var lastError: Throwable = IllegalStateException("InnerTube 모든 클라이언트 실패 — YouTube 가 PoToken 없는 외부 클라이언트를 차단한 영상")
-            for ((url, body, extraHeaders) in attempts) {
+            attempts.forEachIndexed { idx, (url, body, extraHeaders) ->
+                val clientName = clientNames.getOrNull(idx) ?: "UNKNOWN"
                 runCatching {
                     val raw = OkHttpDownloader.post(
                         url = url,
@@ -87,8 +89,11 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                     )
 
                     val json = JSONObject(raw)
+                    val playabilityStatus = json.optJSONObject("playabilityStatus")
+                    val status = playabilityStatus?.optString("status", "") ?: ""
+                    val reason = playabilityStatus?.optString("reason", "") ?: ""
                     val streaming = json.optJSONObject("streamingData")
-                        ?: error("streamingData 없음: ${raw.take(300)}")
+                        ?: error("streamingData 없음, playabilityStatus=$status reason=$reason raw_head=${raw.take(200)}")
 
                     val captionTracks = parseCaptionTracks(json.optJSONObject("captions"))
                     val videoDetails = json.optJSONObject("videoDetails")
@@ -103,7 +108,10 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
 
                     // 1순위: HLS manifest — video+audio 모두 포함
                     val hls = streaming.optString("hlsManifestUrl", "")
-                    if (hls.isNotEmpty()) return@withContext StreamInfo("hls:$hls", captionTracks, durationSec, chapters)
+                    if (hls.isNotEmpty()) {
+                        Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=HLS durationSec=$durationSec urlHead=${hls.take(80)}")
+                        return@withContext StreamInfo("hls:$hls", captionTracks, durationSec, chapters)
+                    }
 
                     // 2순위: 최고화질 muxed 스트림 (formats — 보통 최대 720p)
                     val formats = streaming.optJSONArray("formats")
@@ -115,12 +123,19 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                             val h = f.optInt("height", 0)
                             if (u.isNotEmpty() && h > bestHeight) { bestUrl = u; bestHeight = h }
                         }
-                        if (bestUrl.isNotEmpty()) return@withContext StreamInfo(bestUrl, captionTracks, durationSec, chapters)
+                        if (bestUrl.isNotEmpty()) {
+                            Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=MUXED ${bestHeight}p durationSec=$durationSec urlHead=${bestUrl.take(80)}")
+                            return@withContext StreamInfo(bestUrl, captionTracks, durationSec, chapters)
+                        }
                     }
 
                     error("스트림 URL 없음 (streamingData 있으나 재생 불가)")
-                }.onFailure { lastError = it }
+                }.onFailure {
+                    Log.w("SubFeedStream", "getStreamInfo FAIL videoId=$videoId client=$clientName cause=${it.javaClass.simpleName}: ${it.message?.take(200)}")
+                    lastError = it
+                }
             }
+            Log.e("SubFeedStream", "getStreamInfo all-clients-failed videoId=$videoId lastError=${lastError.javaClass.simpleName}: ${lastError.message?.take(200)}")
             throw lastError
         }
 
