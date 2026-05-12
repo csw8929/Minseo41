@@ -19,11 +19,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 // VideoExtractor 구현체.
-// - 채널 피드: YouTube RSS — fallback: InnerTube `browse` API (videos tab)
+// - 채널 피드: YouTube RSS
 // - 스트림 URL + 자막: YouTube InnerTube API (iOS/ANDROID_VR/TVHTML5 우선)
-private const val INNERTUBE_WEB_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
-// "Videos" tab 의 magic params (uploaded videos 만 노출, shorts/live 거의 제외). yt-dlp 도 같은 값 사용.
-private const val VIDEOS_TAB_PARAMS = "EgZ2aWRlb3PyBgQKAjoA"
 
 @Singleton
 class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
@@ -32,25 +29,11 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
         withContext(Dispatchers.IO) {
             val channelId = channelUrl.substringAfterLast("/").substringBefore("?")
             val rssUrl = "https://www.youtube.com/feeds/videos.xml?channel_id=$channelId"
-            // 1차: RSS. YouTube가 RSS endpoint 를 봇 차단한 시점엔 HTML 응답 → 2차로.
-            val first = OkHttpDownloader.get(rssUrl, OkHttpDownloader.RSS_HEADERS)
-            if (first.startsWith("<?xml")) {
-                return@withContext parseYoutubeRss(first)
+            val raw = OkHttpDownloader.get(rssUrl, OkHttpDownloader.RSS_HEADERS)
+            if (!raw.startsWith("<?xml")) {
+                throw IOException("RSS 응답이 XML 이 아님 — channelId=$channelId, head=${raw.take(120)}")
             }
-            // 2차: InnerTube `browse` API (videos tab) — 어제 fbf0156에서 검증된 방식.
-            Log.d("SubFeedExtractor", "RSS blocked, falling back to InnerTube browse — channelId=$channelId")
-            val raw = OkHttpDownloader.post(
-                url = "https://www.youtube.com/youtubei/v1/browse?key=$INNERTUBE_WEB_KEY&prettyPrint=false",
-                body = """{"browseId":"$channelId","params":"$VIDEOS_TAB_PARAMS","context":{"client":{"clientName":"WEB","clientVersion":"2.20250101.00.00","hl":"en","gl":"US"}}}""",
-                headers = mapOf(
-                    "Content-Type" to "application/json",
-                    "X-YouTube-Client-Name" to "1",
-                    "X-YouTube-Client-Version" to "2.20250101.00.00",
-                    "Origin" to "https://www.youtube.com",
-                    "Referer" to "https://www.youtube.com/",
-                ),
-            )
-            parseInnerTubeChannelVideos(raw)
+            parseYoutubeRss(raw)
         }
 
     override suspend fun getStreamInfo(videoId: String): StreamInfo =
@@ -108,12 +91,19 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                         ?: error("streamingData 없음: ${raw.take(300)}")
 
                     val captionTracks = parseCaptionTracks(json.optJSONObject("captions"))
-                    val durationSec = json.optJSONObject("videoDetails")
-                        ?.optLong("lengthSeconds", 0L) ?: 0L
+                    val videoDetails = json.optJSONObject("videoDetails")
+                    val durationSec = videoDetails?.optLong("lengthSeconds", 0L) ?: 0L
+                    val description = videoDetails?.optString("shortDescription", "").orEmpty()
+                    Log.d(
+                        "SubFeedChapters",
+                        "description: length=${description.length}, head=${description.take(200).replace("\n", "\\n")}",
+                    )
+                    val chapters = parseChapters(description)
+                    Log.d("SubFeedChapters", "parsed chapters: count=${chapters.size}")
 
                     // 1순위: HLS manifest — video+audio 모두 포함
                     val hls = streaming.optString("hlsManifestUrl", "")
-                    if (hls.isNotEmpty()) return@withContext StreamInfo("hls:$hls", captionTracks, durationSec)
+                    if (hls.isNotEmpty()) return@withContext StreamInfo("hls:$hls", captionTracks, durationSec, chapters)
 
                     // 2순위: 최고화질 muxed 스트림 (formats — 보통 최대 720p)
                     val formats = streaming.optJSONArray("formats")
@@ -125,7 +115,7 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                             val h = f.optInt("height", 0)
                             if (u.isNotEmpty() && h > bestHeight) { bestUrl = u; bestHeight = h }
                         }
-                        if (bestUrl.isNotEmpty()) return@withContext StreamInfo(bestUrl, captionTracks, durationSec)
+                        if (bestUrl.isNotEmpty()) return@withContext StreamInfo(bestUrl, captionTracks, durationSec, chapters)
                     }
 
                     error("스트림 URL 없음 (streamingData 있으나 재생 불가)")
@@ -161,82 +151,46 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
         return result
     }
 
-    // InnerTube `browse` (videos tab) 응답에서 영상 목록 추출.
-    // 응답 구조: contents.twoColumnBrowseResultsRenderer.tabs[].tabRenderer.content.richGridRenderer.contents[].richItemRenderer.content.videoRenderer
-    private fun parseInnerTubeChannelVideos(raw: String): List<VideoItem> {
-        val data = JSONObject(raw)
-        val tabs = data.optJSONObject("contents")
-            ?.optJSONObject("twoColumnBrowseResultsRenderer")
-            ?.optJSONArray("tabs") ?: return emptyList()
-
-        var grid: JSONArray? = null
-        for (i in 0 until tabs.length()) {
-            val tabRenderer = tabs.getJSONObject(i).optJSONObject("tabRenderer") ?: continue
-            if (tabRenderer.optBoolean("selected")) {
-                grid = tabRenderer.optJSONObject("content")
-                    ?.optJSONObject("richGridRenderer")
-                    ?.optJSONArray("contents")
-                break
+    // description 텍스트에서 챕터 timestamp 추출.
+    // 라인이 `[?(HH:)?MM:SS]? <title>` 형태로 시작하고 3개 이상 연속, 단조 증가일 때만 valid.
+    // 단일 시각 표기가 본문 안에 흩어진 경우 (예: "그날 01:23 사건") 잘못 잡히지 않도록 보호.
+    private fun parseChapters(description: String): List<Chapter> {
+        if (description.isBlank()) {
+            Log.d("SubFeedChapters", "parseChapters: description blank")
+            return emptyList()
+        }
+        val pattern = Regex("""^\s*\[?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]?\s+(\S.*)$""")
+        val result = mutableListOf<Chapter>()
+        var prevMs = -1L
+        var matchedLines = 0
+        var totalLines = 0
+        for (line in description.lineSequence()) {
+            totalLines++
+            val m = pattern.find(line) ?: continue
+            matchedLines++
+            val h = m.groupValues[1].toIntOrNull() ?: 0
+            val mm = m.groupValues[2].toIntOrNull() ?: continue
+            val s = m.groupValues[3].toIntOrNull() ?: continue
+            if (mm >= 60 || s >= 60) {
+                Log.d("SubFeedChapters", "  rejected (mm/ss>=60): line=$line")
+                continue
             }
+            val title = m.groupValues[4].trim()
+            if (title.isEmpty()) continue
+            val totalMs = ((h * 3600 + mm * 60 + s).toLong()) * 1000L
+            Log.d("SubFeedChapters", "  matched: ${totalMs}ms title=$title")
+            if (totalMs <= prevMs) {
+                Log.d("SubFeedChapters", "  monotonic broken at ${totalMs}ms (prev=$prevMs) → discard all")
+                return emptyList()
+            }
+            prevMs = totalMs
+            result.add(Chapter(totalMs, title))
         }
-        grid ?: return emptyList()
-
-        val items = mutableListOf<VideoItem>()
-        val now = System.currentTimeMillis()
-        for (i in 0 until grid.length()) {
-            val rich = grid.optJSONObject(i)?.optJSONObject("richItemRenderer") ?: continue
-            val v = rich.optJSONObject("content")?.optJSONObject("videoRenderer") ?: continue
-            val videoId = v.optString("videoId", "")
-            if (videoId.isEmpty()) continue
-            val title = v.optJSONObject("title")?.let { titleObj ->
-                titleObj.optString("simpleText").ifEmpty {
-                    titleObj.optJSONArray("runs")?.optJSONObject(0)?.optString("text") ?: ""
-                }
-            } ?: ""
-            val channelName = v.optJSONObject("ownerText")?.optJSONArray("runs")
-                ?.optJSONObject(0)?.optString("text") ?: ""
-            val publishedText = v.optJSONObject("publishedTimeText")?.optString("simpleText") ?: ""
-            val uploadedAt = parseRelativeEnglishTime(publishedText, now)
-            val thumb = v.optJSONObject("thumbnail")?.optJSONArray("thumbnails")?.let { ts ->
-                if (ts.length() == 0) "" else ts.getJSONObject(ts.length() - 1).optString("url", "")
-            } ?: ""
-            items.add(
-                VideoItem(
-                    id = videoId,
-                    title = title,
-                    channelName = channelName,
-                    thumbnailUrl = thumb.ifEmpty { "https://i.ytimg.com/vi/$videoId/hqdefault.jpg" },
-                    durationSeconds = 0L,
-                    uploadedAt = uploadedAt,
-                )
-            )
-        }
-        return items
+        Log.d("SubFeedChapters", "parseChapters: totalLines=$totalLines, matched=$matchedLines, result.size=${result.size}")
+        return if (result.size >= 3) result else emptyList()
     }
 
-    // "1 day ago", "3 hours ago", "7h ago", "1d ago", "2w ago" 등 영문 상대시각 → 절대 epoch ms.
-    // YouTube가 풀 표기와 축약 표기를 섞어 응답하므로 둘 다 처리.
-    // 라이브/예정 영상엔 publishedTimeText 가 없거나 매치 실패 → 0 반환 → cutoff 필터에서 제외됨.
-    private fun parseRelativeEnglishTime(text: String, now: Long): Long {
-        if (text.isBlank()) return 0L
-        val match = Regex("""(\d+)\s*([a-z]+)\s+ago""", RegexOption.IGNORE_CASE)
-            .find(text) ?: return 0L
-        val n = match.groupValues[1].toLong()
-        val unit = match.groupValues[2].lowercase()
-        val deltaMs = when (unit) {
-            "s", "sec", "secs", "second", "seconds" -> n * 1_000L
-            "m", "min", "mins", "minute", "minutes" -> n * 60_000L
-            "h", "hr", "hrs", "hour", "hours" -> n * 3_600_000L
-            "d", "day", "days" -> n * 86_400_000L
-            "w", "wk", "wks", "week", "weeks" -> n * 7L * 86_400_000L
-            "mo", "mos", "month", "months" -> n * 30L * 86_400_000L
-            "y", "yr", "yrs", "year", "years" -> n * 365L * 86_400_000L
-            else -> 0L
-        }
-        return now - deltaMs
-    }
-
-    // YouTube Atom RSS 파싱 (channel_id 기반 피드, 채널당 최신 15개) — 1차 path
+    // YouTube Atom RSS 파싱 (channel_id 기반 피드, 채널당 최신 15개)
     private fun parseYoutubeRss(xml: String): List<VideoItem> {
         val items = mutableListOf<VideoItem>()
         val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = true }

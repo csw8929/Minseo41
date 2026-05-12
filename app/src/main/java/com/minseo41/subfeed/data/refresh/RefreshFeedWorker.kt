@@ -17,6 +17,7 @@ import dagger.assisted.AssistedInject
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -39,13 +40,24 @@ class RefreshFeedWorker @AssistedInject constructor(
         val now = System.currentTimeMillis()
         val today = LocalDate.now(ZoneId.systemDefault())
 
-        val results = channels.map { channel ->
-            async { refreshChannel(channel, now, today) }
+        val firstPass = channels.map { channel ->
+            async { channel to refreshChannel(channel, now, today) }
         }.awaitAll()
 
-        val successCount = results.count { it }
+        val firstSuccess = firstPass.count { it.second }
+        val failed = firstPass.filter { !it.second }.map { it.first }
+
+        val retrySuccess = if (failed.isNotEmpty()) {
+            Log.d(TAG, "retry ${failed.size} failed channels after 1s")
+            delay(1000)
+            failed.map { channel ->
+                async { refreshChannel(channel, now, today) }
+            }.awaitAll().count { it }
+        } else 0
+
+        val successCount = firstSuccess + retrySuccess
         refreshPrefs.saveLog(RefreshLogEntry(now, channels.size, successCount))
-        Log.d(TAG, "refresh done: $successCount/${channels.size} channels")
+        Log.d(TAG, "refresh done: $successCount/${channels.size} channels (1st: $firstSuccess, retry: $retrySuccess)")
 
         Result.success(workDataOf("ch" to channels.size, "ok" to successCount))
     }
