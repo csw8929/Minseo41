@@ -61,6 +61,9 @@ class SubFeedMediaSessionService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .setHandleAudioBecomingNoisy(true)
             .build()
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setPreferredAudioLanguages("ko")
+            .build()
 
         // 알림 탭 시 PlayerScreen으로 deep-link 가도록, 현재 video의 mediaId 변경되면
         // sessionActivity 갱신.
