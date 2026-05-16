@@ -1,6 +1,9 @@
 package com.minseo41.subfeed.ui
 
+import android.content.Intent
 import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -40,6 +43,15 @@ fun SettingsScreen(
     val refreshLogs by viewModel.refreshLogs.collectAsState()
     var showLogDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val powerManager = context.getSystemService(PowerManager::class.java)
+    var isBatteryOptimized by remember {
+        mutableStateOf(!powerManager.isIgnoringBatteryOptimizations(context.packageName))
+    }
+    val batteryOptLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        isBatteryOptimized = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -182,6 +194,36 @@ fun SettingsScreen(
                 "영상 진입 시 자동으로 전체화면(가로) 모드로 시작합니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
+
+            HorizontalDivider()
+
+            Text("백그라운드 갱신", style = MaterialTheme.typography.titleMedium)
+
+            if (isBatteryOptimized) {
+                Text(
+                    "배터리 최적화가 켜져 있어 앱을 닫으면 자동 갱신이 중단될 수 있습니다. 아래 버튼으로 제외하세요.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Button(
+                    onClick = {
+                        batteryOptLauncher.launch(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("배터리 최적화 제외 설정")
+                }
+            } else {
+                Text(
+                    "배터리 최적화 제외됨 — 백그라운드 갱신이 정상 동작합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
 
             HorizontalDivider()
 
