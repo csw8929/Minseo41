@@ -1,8 +1,10 @@
 package com.minseo41.subfeed.data
 
+import android.util.Base64
 import android.util.Log
 import com.minseo41.subfeed.model.VideoItem
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -63,81 +65,168 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                         "X-YouTube-Client-Version" to "1.65.10",
                     )
                 ),
-                // 3순위: TVHTML5 embedded — clientScreen:EMBED 필수
+                // 3순위: ANDROID 19.44.38 — DASH manifest 반환 (TVHTML5 대체)
+                // contentCheckOk/racyCheckOk 없으면 400 "Precondition check failed" 발생
                 Triple(
                     "https://www.youtube.com/youtubei/v1/player?key=$androidKey&prettyPrint=false",
-                    """{"videoId":"$videoId","context":{"client":{"clientName":"TVHTML5_SIMPLY_EMBEDDED_PLAYER","clientVersion":"2.0","clientScreen":"EMBED","hl":"ko","gl":"KR"},"thirdParty":{"embedUrl":"https://www.youtube.com/"}}}""",
+                    """{"videoId":"$videoId","contentCheckOk":true,"racyCheckOk":true,"context":{"client":{"clientName":"ANDROID","clientVersion":"19.44.38","androidSdkVersion":30,"osName":"Android","osVersion":"11","platform":"MOBILE","hl":"ko","gl":"KR"}}}""",
                     mapOf(
-                        "User-Agent" to "Mozilla/5.0 (SMART-TV; Linux) AppleWebKit/537.36",
-                        "X-YouTube-Client-Name" to "85",
-                        "X-YouTube-Client-Version" to "2.0",
-                        "Origin" to "https://www.youtube.com",
-                        "Referer" to "https://www.youtube.com/",
+                        "User-Agent" to "com.google.android.youtube/19.44.38 (Linux; U; Android 11) gzip",
+                        "X-YouTube-Client-Name" to "3",
+                        "X-YouTube-Client-Version" to "19.44.38",
                     )
                 ),
             )
 
-            val clientNames = listOf("IOS", "ANDROID_VR", "TVHTML5_EMBED")
+            val clientNames = listOf("IOS", "ANDROID_VR", "ANDROID")
             var lastError: Throwable = IllegalStateException("InnerTube 모든 클라이언트 실패 — YouTube 가 PoToken 없는 외부 클라이언트를 차단한 영상")
-            attempts.forEachIndexed { idx, (url, body, extraHeaders) ->
-                val clientName = clientNames.getOrNull(idx) ?: "UNKNOWN"
-                runCatching {
-                    val raw = OkHttpDownloader.post(
-                        url = url,
-                        body = body,
-                        headers = extraHeaders + mapOf("Content-Type" to "application/json"),
-                    )
 
-                    val json = JSONObject(raw)
-                    val playabilityStatus = json.optJSONObject("playabilityStatus")
-                    val status = playabilityStatus?.optString("status", "") ?: ""
-                    val reason = playabilityStatus?.optString("reason", "") ?: ""
-                    val streaming = json.optJSONObject("streamingData")
-                        ?: error("streamingData 없음, playabilityStatus=$status reason=$reason raw_head=${raw.take(200)}")
+            // YouTube 봇 검사/속도 제한은 간헐적이므로 전체 클라이언트 순서를 최대 2회 시도
+            repeat(2) { round ->
+                if (round > 0) delay(1_500L)
+                attempts.forEachIndexed { idx, (url, body, extraHeaders) ->
+                    val clientName = clientNames.getOrNull(idx) ?: "UNKNOWN"
+                    runCatching {
+                        val raw = OkHttpDownloader.post(
+                            url = url,
+                            body = body,
+                            headers = extraHeaders + mapOf("Content-Type" to "application/json"),
+                        )
 
-                    val captionTracks = parseCaptionTracks(json.optJSONObject("captions"))
-                    val videoDetails = json.optJSONObject("videoDetails")
-                    val durationSec = videoDetails?.optLong("lengthSeconds", 0L) ?: 0L
-                    val description = videoDetails?.optString("shortDescription", "").orEmpty()
-                    Log.d(
-                        "SubFeedChapters",
-                        "description: length=${description.length}, head=${description.take(200).replace("\n", "\\n")}",
-                    )
-                    val chapters = parseChapters(description)
-                    Log.d("SubFeedChapters", "parsed chapters: count=${chapters.size}")
+                        val json = JSONObject(raw)
+                        val playabilityStatus = json.optJSONObject("playabilityStatus")
+                        val status = playabilityStatus?.optString("status", "") ?: ""
+                        val reason = playabilityStatus?.optString("reason", "") ?: ""
+                        val streaming = json.optJSONObject("streamingData")
+                            ?: error("streamingData 없음, playabilityStatus=$status reason=$reason raw_head=${raw.take(200)}")
 
-                    // 1순위: HLS manifest — video+audio 모두 포함
-                    val hls = streaming.optString("hlsManifestUrl", "")
-                    if (hls.isNotEmpty()) {
-                        Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=HLS durationSec=$durationSec urlHead=${hls.take(80)}")
-                        return@withContext StreamInfo("hls:$hls", captionTracks, durationSec, chapters)
-                    }
+                        val captionTracks = parseCaptionTracks(json.optJSONObject("captions"))
+                        val videoDetails = json.optJSONObject("videoDetails")
+                        val durationSec = videoDetails?.optLong("lengthSeconds", 0L) ?: 0L
+                        val description = videoDetails?.optString("shortDescription", "").orEmpty()
+                        Log.d(
+                            "SubFeedChapters",
+                            "description: length=${description.length}, head=${description.take(200).replace("\n", "\\n")}",
+                        )
+                        val chapters = parseChapters(description)
+                        Log.d("SubFeedChapters", "parsed chapters: count=${chapters.size}")
 
-                    // 2순위: 최고화질 muxed 스트림 (formats — 보통 최대 720p)
-                    val formats = streaming.optJSONArray("formats")
-                    if (formats != null) {
-                        var bestUrl = ""; var bestHeight = 0
-                        for (i in 0 until formats.length()) {
-                            val f = formats.getJSONObject(i)
-                            val u = f.optString("url", "")
-                            val h = f.optInt("height", 0)
-                            if (u.isNotEmpty() && h > bestHeight) { bestUrl = u; bestHeight = h }
+                        // 1순위: HLS manifest — video+audio 모두 포함
+                        val hls = streaming.optString("hlsManifestUrl", "")
+                        if (hls.isNotEmpty()) {
+                            Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=HLS durationSec=$durationSec urlHead=${hls.take(80)}")
+                            return@withContext StreamInfo("hls:$hls", captionTracks, durationSec, chapters)
                         }
-                        if (bestUrl.isNotEmpty()) {
-                            Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=MUXED ${bestHeight}p durationSec=$durationSec urlHead=${bestUrl.take(80)}")
-                            return@withContext StreamInfo(bestUrl, captionTracks, durationSec, chapters)
-                        }
-                    }
 
-                    error("스트림 URL 없음 (streamingData 있으나 재생 불가)")
-                }.onFailure {
-                    Log.w("SubFeedStream", "getStreamInfo FAIL videoId=$videoId client=$clientName cause=${it.javaClass.simpleName}: ${it.message?.take(200)}")
-                    lastError = it
+                        // 2순위: DASH manifest — ANDROID 클라이언트가 주로 반환
+                        val dash = streaming.optString("dashManifestUrl", "")
+                        if (dash.isNotEmpty()) {
+                            Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=DASH durationSec=$durationSec urlHead=${dash.take(80)}")
+                            return@withContext StreamInfo("dash:$dash", captionTracks, durationSec, chapters)
+                        }
+
+                        // 3순위: 최고화질 muxed 스트림 (formats — 보통 최대 720p)
+                        val formats = streaming.optJSONArray("formats")
+                        if (formats != null) {
+                            var bestUrl = ""; var bestHeight = 0
+                            for (i in 0 until formats.length()) {
+                                val f = formats.getJSONObject(i)
+                                val u = f.optString("url", "")
+                                val h = f.optInt("height", 0)
+                                if (u.isNotEmpty() && h > bestHeight) { bestUrl = u; bestHeight = h }
+                            }
+                            if (bestUrl.isNotEmpty()) {
+                                Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=MUXED ${bestHeight}p durationSec=$durationSec urlHead=${bestUrl.take(80)}")
+                                return@withContext StreamInfo(bestUrl, captionTracks, durationSec, chapters)
+                            }
+                        }
+
+                        // 4순위: adaptiveFormats → 인라인 DASH manifest 생성
+                        // iOS 클라이언트가 hlsManifestUrl/dashManifestUrl 없이 adaptive 스트림만 반환할 때 사용
+                        val adaptiveFormats = streaming.optJSONArray("adaptiveFormats")
+                        if (adaptiveFormats != null && adaptiveFormats.length() > 0) {
+                            val b64Mpd = buildAdaptiveDashManifest(adaptiveFormats, durationSec)
+                            if (b64Mpd != null) {
+                                Log.d("SubFeedStream", "getStreamInfo OK videoId=$videoId client=$clientName type=ADAPTIVE-DASH adaptive=${adaptiveFormats.length()} durationSec=$durationSec")
+                                return@withContext StreamInfo("dash:data:application/dash+xml;base64,$b64Mpd", captionTracks, durationSec, chapters)
+                            }
+                        }
+                        error("스트림 URL 없음 (streamingData 있으나 재생 불가)")
+                    }.onFailure {
+                        Log.w("SubFeedStream", "getStreamInfo FAIL round=$round videoId=$videoId client=$clientName cause=${it.javaClass.simpleName}: ${it.message?.take(200)}")
+                        lastError = it
+                    }
                 }
             }
             Log.e("SubFeedStream", "getStreamInfo all-clients-failed videoId=$videoId lastError=${lastError.javaClass.simpleName}: ${lastError.message?.take(200)}")
             throw lastError
         }
+
+    // adaptiveFormats 배열(비암호화 URL)로 인라인 DASH MPD를 만들어 base64 반환.
+    // iOS 클라이언트가 hlsManifestUrl 없이 adaptive 스트림만 줄 때 사용.
+    private fun buildAdaptiveDashManifest(adaptiveFormats: JSONArray, durationSec: Long): String? {
+        var bestVideo: JSONObject? = null
+        var bestVideoHeight = 0
+        var bestAudio: JSONObject? = null
+        var bestAudioBitrate = 0
+
+        for (i in 0 until adaptiveFormats.length()) {
+            val f = adaptiveFormats.getJSONObject(i)
+            if (f.optString("url", "").isEmpty()) continue
+            val mime = f.optString("mimeType", "")
+            when {
+                mime.startsWith("video/") -> {
+                    val h = f.optInt("height", 0)
+                    if (h in 1..1080 && h > bestVideoHeight) { bestVideo = f; bestVideoHeight = h }
+                }
+                mime.startsWith("audio/") -> {
+                    val bw = f.optInt("bitrate", 0)
+                    if (bw > bestAudioBitrate) { bestAudio = f; bestAudioBitrate = bw }
+                }
+            }
+        }
+        if (bestVideo == null || bestAudio == null) return null
+
+        val dur = if (durationSec > 0) "PT${durationSec}S" else "PT0S"
+
+        // XML 텍ス트/속성에 삽입되는 URL과 문자열은 반드시 이스케이프 필요
+        // YouTube URL에는 & 문자가 포함되어 있어 XML 파서가 entity ref로 오인함
+        fun String.xmlEscape() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+
+        fun segBase(f: JSONObject): String {
+            val init = f.optJSONObject("initRange") ?: return ""
+            val idx  = f.optJSONObject("indexRange") ?: return ""
+            return """<SegmentBase indexRange="${idx.getString("start")}-${idx.getString("end")}">""" +
+                   """<Initialization range="${init.getString("start")}-${init.getString("end")}"/></SegmentBase>"""
+        }
+        fun mimeOnly(s: String) = s.substringBefore(";").trim()
+        fun codecs(s: String) = Regex("""codecs="([^"]+)"""").find(s)?.groupValues?.get(1) ?: ""
+
+        val vMime = bestVideo.getString("mimeType")
+        val aMime = bestAudio.getString("mimeType")
+        val mpd = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8"?>""")
+            append("""<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" minBufferTime="PT1.5S" type="static" """)
+            append("""mediaPresentationDuration="$dur" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011">""")
+            append("""<Period duration="$dur">""")
+            append("""<AdaptationSet id="1" contentType="video">""")
+            append("""<Representation id="v0" mimeType="${mimeOnly(vMime).xmlEscape()}" codecs="${codecs(vMime).xmlEscape()}" """)
+            append("""width="${bestVideo.optInt("width")}" height="${bestVideo.optInt("height")}" """)
+            append("""bandwidth="${bestVideo.optInt("bitrate")}" frameRate="${bestVideo.optInt("fps", 30)}">""")
+            append("<BaseURL>${bestVideo.getString("url").xmlEscape()}</BaseURL>")
+            append(segBase(bestVideo))
+            append("</Representation></AdaptationSet>")
+            append("""<AdaptationSet id="2" contentType="audio">""")
+            append("""<Representation id="a0" mimeType="${mimeOnly(aMime).xmlEscape()}" codecs="${codecs(aMime).xmlEscape()}" """)
+            append("""bandwidth="${bestAudio.optInt("bitrate")}" """)
+            append("""audioSamplingRate="${bestAudio.optString("audioSampleRate", "44100")}">""")
+            append("<BaseURL>${bestAudio.getString("url").xmlEscape()}</BaseURL>")
+            append(segBase(bestAudio))
+            append("</Representation></AdaptationSet>")
+            append("</Period></MPD>")
+        }
+        return Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+    }
 
     private fun parseCaptionTracks(captions: JSONObject?): List<CaptionTrack> {
         if (captions == null) return emptyList()
