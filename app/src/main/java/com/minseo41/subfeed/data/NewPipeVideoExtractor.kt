@@ -164,32 +164,50 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
 
     // adaptiveFormats 배열(비암호화 URL)로 인라인 DASH MPD를 만들어 base64 반환.
     // iOS 클라이언트가 hlsManifestUrl 없이 adaptive 스트림만 줄 때 사용.
+    // audioTrack.id("1.ko", "2.en" 등)가 있으면 언어별 AdaptationSet을 생성해 ExoPlayer의
+    // preferredAudioLanguages("ko") 가 올바른 트랙을 선택할 수 있게 한다.
     private fun buildAdaptiveDashManifest(adaptiveFormats: JSONArray, durationSec: Long): String? {
+        data class BestAudio(val format: JSONObject, val bitrate: Int)
+
         var bestVideo: JSONObject? = null
         var bestVideoHeight = 0
-        var bestAudio: JSONObject? = null
-        var bestAudioBitrate = 0
+        val audioByLang = linkedMapOf<String, BestAudio>()
+        var fallbackAudio: JSONObject? = null
+        var fallbackBitrate = 0
 
         for (i in 0 until adaptiveFormats.length()) {
             val f = adaptiveFormats.getJSONObject(i)
             if (f.optString("url", "").isEmpty()) continue
             val mime = f.optString("mimeType", "")
+            val bw = f.optInt("bitrate", 0)
             when {
                 mime.startsWith("video/") -> {
                     val h = f.optInt("height", 0)
                     if (h in 1..1080 && h > bestVideoHeight) { bestVideo = f; bestVideoHeight = h }
                 }
                 mime.startsWith("audio/") -> {
-                    val bw = f.optInt("bitrate", 0)
-                    if (bw > bestAudioBitrate) { bestAudio = f; bestAudioBitrate = bw }
+                    val lang = f.optJSONObject("audioTrack")?.optString("id", "")
+                        ?.substringAfterLast(".", "")?.takeIf { it.isNotEmpty() }
+                    if (lang != null) {
+                        val prev = audioByLang[lang]
+                        if (prev == null || bw > prev.bitrate) audioByLang[lang] = BestAudio(f, bw)
+                    } else {
+                        if (bw > fallbackBitrate) { fallbackAudio = f; fallbackBitrate = bw }
+                    }
                 }
             }
         }
-        if (bestVideo == null || bestAudio == null) return null
+        if (bestVideo == null) return null
+
+        val audioList: List<Pair<String?, JSONObject>> = when {
+            audioByLang.isNotEmpty() -> audioByLang.entries.map { (lang, best) -> lang to best.format }
+            fallbackAudio != null -> listOf(null to fallbackAudio!!)
+            else -> return null
+        }
 
         val dur = if (durationSec > 0) "PT${durationSec}S" else "PT0S"
 
-        // XML 텍ス트/속성에 삽입되는 URL과 문자열은 반드시 이스케이프 필요
+        // XML 텍스트/속성에 삽입되는 URL과 문자열은 반드시 이스케이프 필요
         // YouTube URL에는 & 문자가 포함되어 있어 XML 파서가 entity ref로 오인함
         fun String.xmlEscape() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
@@ -203,7 +221,6 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
         fun codecs(s: String) = Regex("""codecs="([^"]+)"""").find(s)?.groupValues?.get(1) ?: ""
 
         val vMime = bestVideo.getString("mimeType")
-        val aMime = bestAudio.getString("mimeType")
         val mpd = buildString {
             append("""<?xml version="1.0" encoding="UTF-8"?>""")
             append("""<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" minBufferTime="PT1.5S" type="static" """)
@@ -216,13 +233,17 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
             append("<BaseURL>${bestVideo.getString("url").xmlEscape()}</BaseURL>")
             append(segBase(bestVideo))
             append("</Representation></AdaptationSet>")
-            append("""<AdaptationSet id="2" contentType="audio">""")
-            append("""<Representation id="a0" mimeType="${mimeOnly(aMime).xmlEscape()}" codecs="${codecs(aMime).xmlEscape()}" """)
-            append("""bandwidth="${bestAudio.optInt("bitrate")}" """)
-            append("""audioSamplingRate="${bestAudio.optString("audioSampleRate", "44100")}">""")
-            append("<BaseURL>${bestAudio.getString("url").xmlEscape()}</BaseURL>")
-            append(segBase(bestAudio))
-            append("</Representation></AdaptationSet>")
+            audioList.forEachIndexed { index, (lang, audio) ->
+                val langAttr = if (lang != null) """ lang="${lang.xmlEscape()}"""" else ""
+                val aMime = audio.getString("mimeType")
+                append("""<AdaptationSet id="${2 + index}" contentType="audio"$langAttr>""")
+                append("""<Representation id="a$index" mimeType="${mimeOnly(aMime).xmlEscape()}" codecs="${codecs(aMime).xmlEscape()}" """)
+                append("""bandwidth="${audio.optInt("bitrate")}" """)
+                append("""audioSamplingRate="${audio.optString("audioSampleRate", "44100")}">""")
+                append("<BaseURL>${audio.getString("url").xmlEscape()}</BaseURL>")
+                append(segBase(audio))
+                append("</Representation></AdaptationSet>")
+            }
             append("</Period></MPD>")
         }
         return Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
