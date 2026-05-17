@@ -43,6 +43,20 @@
   <Representation id="a1" ...> <!-- 영어 192kbps -->
 ```
 
+## 추가 수정 (2026-05-17)
+
+### 2차 버그: `audioTrack.id` 포맷 불일치
+
+**증상**: 수정 후에도 일부 영상에서 프랑스어 등 다른 언어가 재생됨. ExoPlayer 로그에서 `lang=10`, `lang=4` 같은 숫자 코드가 보임.
+
+**원인**: YouTube `audioTrack.id` 포맷이 두 가지 혼재:
+- `"1.ko"` — 숫자.언어코드 (가정했던 형식)
+- `"fr.10"` — 언어코드.숫자 (실제로도 존재하는 형식)
+
+`substringAfterLast(".", "")` 만 사용하면 `"fr.10"` → `"10"`, `"ko.4"` → `"4"` 로 숫자가 lang으로 들어가 ExoPlayer가 `preferredAudioLanguages("ko")`를 매칭하지 못함.
+
+**수정**: `.split(".")` 후 BCP-47 언어 코드 패턴(`^[a-z]{2,3}(-[a-zA-Z0-9]+)*$`)에 매칭되는 부분을 선택. 어느 쪽이 언어코드든 올바르게 추출.
+
 ## 영향 범위
 
 `adaptiveFormats` fallback만 해당. 대부분의 영상은 iOS HLS 경로를 사용하므로 영향 없음. 멀티 언어 더빙 콘텐츠(YouTube에서 공식 제공하는 anime, 영화, 글로벌 채널)에서 효과 있음.

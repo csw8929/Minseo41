@@ -186,8 +186,11 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                     if (h in 1..1080 && h > bestVideoHeight) { bestVideo = f; bestVideoHeight = h }
                 }
                 mime.startsWith("audio/") -> {
+                    // audioTrack.id 포맷은 "1.ko"(숫자.언어) 또는 "fr.10"(언어.숫자) 둘 다 존재.
+                    // split 후 BCP-47 언어 코드처럼 생긴 부분(2~3자 알파벳)을 골라낸다.
+                    val langPattern = Regex("^[a-z]{2,3}(-[a-zA-Z0-9]+)*$")
                     val lang = f.optJSONObject("audioTrack")?.optString("id", "")
-                        ?.substringAfterLast(".", "")?.takeIf { it.isNotEmpty() }
+                        ?.split(".")?.firstOrNull { langPattern.matches(it) }
                     if (lang != null) {
                         val prev = audioByLang[lang]
                         if (prev == null || bw > prev.bitrate) audioByLang[lang] = BestAudio(f, bw)
