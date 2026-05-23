@@ -101,7 +101,7 @@ feed  →  settings
 
 ## TODO
 
-- [ ] **챕터 디버그 로그 제거** — `data/NewPipeVideoExtractor.kt` 의 `Log.d("SubFeedChapters", …)` 호출들 (getStreamInfo 블록 + `parseChapters` 함수 내부). 챕터 기능 안정화 확인 후 삭제. (2026-05-12 추가)
+- [x] **챕터 디버그 로그 제거** — `data/NewPipeVideoExtractor.kt` 의 `Log.d("SubFeedChapters", …)` 호출들. v1.0.1.0에서 완료.
 
 ---
 
