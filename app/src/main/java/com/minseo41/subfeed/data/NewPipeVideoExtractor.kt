@@ -371,8 +371,9 @@ object OkHttpDownloader {
             .url(url)
             .apply { headers.forEach { (k, v) -> if (v.isNotEmpty()) addHeader(k, v) } }
             .build()
-        val response = client.newCall(request).execute()
-        return response.body?.string() ?: throw IOException("Empty body: $url")
+        return client.newCall(request).execute().use { response ->
+            response.body?.string() ?: throw IOException("Empty body: $url")
+        }
     }
 
     fun post(url: String, body: String, headers: Map<String, String> = emptyMap()): String {
@@ -382,7 +383,8 @@ object OkHttpDownloader {
             .post(requestBody)
             .apply { headers.forEach { (k, v) -> if (v.isNotEmpty()) addHeader(k, v) } }
             .build()
-        val response = client.newCall(request).execute()
-        return response.body?.string() ?: throw IOException("Empty body: $url")
+        return client.newCall(request).execute().use { response ->
+            response.body?.string() ?: throw IOException("Empty body: $url")
+        }
     }
 }
