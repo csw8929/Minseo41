@@ -104,12 +104,7 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
                         val videoDetails = json.optJSONObject("videoDetails")
                         val durationSec = videoDetails?.optLong("lengthSeconds", 0L) ?: 0L
                         val description = videoDetails?.optString("shortDescription", "").orEmpty()
-                        Log.d(
-                            "SubFeedChapters",
-                            "description: length=${description.length}, head=${description.take(200).replace("\n", "\\n")}",
-                        )
                         val chapters = parseChapters(description)
-                        Log.d("SubFeedChapters", "parsed chapters: count=${chapters.size}")
 
                         // 1순위: HLS manifest — video+audio 모두 포함
                         val hls = streaming.optString("hlsManifestUrl", "")
@@ -283,38 +278,24 @@ class NewPipeVideoExtractor @Inject constructor() : VideoExtractor {
     // 라인이 `[?(HH:)?MM:SS]? <title>` 형태로 시작하고 3개 이상 연속, 단조 증가일 때만 valid.
     // 단일 시각 표기가 본문 안에 흩어진 경우 (예: "그날 01:23 사건") 잘못 잡히지 않도록 보호.
     private fun parseChapters(description: String): List<Chapter> {
-        if (description.isBlank()) {
-            Log.d("SubFeedChapters", "parseChapters: description blank")
-            return emptyList()
-        }
+        if (description.isBlank()) return emptyList()
         val pattern = Regex("""^\s*\[?(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]?\s+(\S.*)$""")
         val result = mutableListOf<Chapter>()
         var prevMs = -1L
-        var matchedLines = 0
-        var totalLines = 0
         for (line in description.lineSequence()) {
-            totalLines++
             val m = pattern.find(line) ?: continue
-            matchedLines++
             val h = m.groupValues[1].toIntOrNull() ?: 0
             val mm = m.groupValues[2].toIntOrNull() ?: continue
             val s = m.groupValues[3].toIntOrNull() ?: continue
-            if (mm >= 60 || s >= 60) {
-                Log.d("SubFeedChapters", "  rejected (mm/ss>=60): line=$line")
-                continue
-            }
+            if (mm >= 60 || s >= 60) continue
             val title = m.groupValues[4].trim()
             if (title.isEmpty()) continue
             val totalMs = ((h * 3600 + mm * 60 + s).toLong()) * 1000L
-            Log.d("SubFeedChapters", "  matched: ${totalMs}ms title=$title")
-            if (totalMs <= prevMs) {
-                Log.d("SubFeedChapters", "  monotonic broken at ${totalMs}ms (prev=$prevMs) → discard all")
-                return emptyList()
-            }
+            if (totalMs < prevMs) return emptyList()
+            if (totalMs == prevMs) continue
             prevMs = totalMs
             result.add(Chapter(totalMs, title))
         }
-        Log.d("SubFeedChapters", "parseChapters: totalLines=$totalLines, matched=$matchedLines, result.size=${result.size}")
         return if (result.size >= 3) result else emptyList()
     }
 
@@ -383,25 +364,27 @@ object OkHttpDownloader {
         "Cookie" to "CONSENT=YES+cb",
     )
 
+    private val client = OkHttpClient.Builder().followRedirects(true).build()
+
     fun get(url: String, headers: Map<String, String> = emptyMap()): String {
-        val client = OkHttpClient.Builder().followRedirects(true).build()
         val request = OkRequest.Builder()
             .url(url)
             .apply { headers.forEach { (k, v) -> if (v.isNotEmpty()) addHeader(k, v) } }
             .build()
-        val response = client.newCall(request).execute()
-        return response.body?.string() ?: throw IOException("Empty body: $url")
+        return client.newCall(request).execute().use { response ->
+            response.body?.string() ?: throw IOException("Empty body: $url")
+        }
     }
 
     fun post(url: String, body: String, headers: Map<String, String> = emptyMap()): String {
-        val client = OkHttpClient.Builder().followRedirects(true).build()
         val requestBody = body.toRequestBody("application/json".toMediaType())
         val request = OkRequest.Builder()
             .url(url)
             .post(requestBody)
             .apply { headers.forEach { (k, v) -> if (v.isNotEmpty()) addHeader(k, v) } }
             .build()
-        val response = client.newCall(request).execute()
-        return response.body?.string() ?: throw IOException("Empty body: $url")
+        return client.newCall(request).execute().use { response ->
+            response.body?.string() ?: throw IOException("Empty body: $url")
+        }
     }
 }
