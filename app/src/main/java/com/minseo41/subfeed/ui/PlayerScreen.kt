@@ -291,10 +291,13 @@ fun PlayerScreen(
         val controller = mediaController ?: return@LaunchedEffect
         val info = uiState.streamInfo ?: return@LaunchedEffect
         val isRetryRun = retryTriggerAt > 0L && retryTriggerAt != lastHandledRetryAt
+        var retryFromPositionMs = 0L
         if (isRetryRun) {
+            // delay 전에 현재 위치를 캡처 — delay 후엔 clearMediaItems로 position이 초기화됨.
+            retryFromPositionMs = controller.currentPosition
             android.util.Log.w(
                 "SubFeedPlayer",
-                "retry-403 waiting 1s before reprepare — count=$playbackRetryCount videoId=$videoId",
+                "retry-403 waiting 1s before reprepare — count=$playbackRetryCount videoId=$videoId posMs=$retryFromPositionMs",
             )
             delay(1000L)
             lastHandledRetryAt = retryTriggerAt
@@ -304,10 +307,11 @@ fun PlayerScreen(
         }
         val isNewVideo = videoId != lastPreparedVideoId
         // 새 영상 진입 시: controller.currentPosition은 이전 영상 위치라 무시. saved 위치만 사용.
-        val savedPos = if (isNewVideo) {
-            uiState.resumePositionMs
-        } else {
-            controller.currentPosition.takeIf { it > 0L } ?: uiState.resumePositionMs
+        // 재시도 시: delay 전에 캡처한 위치에서 재개 (resumePositionMs는 초기 로드 시 값이라 부정확).
+        val savedPos = when {
+            isRetryRun && retryFromPositionMs > 0L -> retryFromPositionMs
+            isNewVideo -> uiState.resumePositionMs
+            else -> controller.currentPosition.takeIf { it > 0L } ?: uiState.resumePositionMs
         }
         val raw = info.streamUrl
         val metadata = MediaMetadata.Builder()
@@ -572,7 +576,7 @@ fun PlayerScreen(
                             uiState.currentVideoHeight > 0 -> "자동 ${uiState.currentVideoHeight}p"
                             else -> "자동"
                         },
-                        qualityEnabled = uiState.isHlsStream,
+                        qualityEnabled = true,
                         captionEnabled = uiState.selectedCaptionLanguage != null,
                         orientationLocked = uiState.orientationLocked,
                         chaptersAvailable = (uiState.streamInfo?.chapters?.isNotEmpty() == true),
