@@ -8,6 +8,14 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val appVersion = rootProject.file("VERSION").readText().trim()
+val versionParts = appVersion.split(".")
+val computedVersionCode =
+    versionParts[0].toInt() * 1000 +
+    versionParts[1].toInt() * 100 +
+    versionParts[2].toInt() * 10 +
+    versionParts[3].toInt()
+
 android {
     namespace = "com.minseo41.subfeed"
     compileSdk = 36
@@ -16,8 +24,8 @@ android {
         applicationId = "com.minseo41.subfeed"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = computedVersionCode
+        versionName = appVersion
     }
 
     buildTypes {
