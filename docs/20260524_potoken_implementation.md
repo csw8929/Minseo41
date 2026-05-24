@@ -1,94 +1,145 @@
-# PoToken 구현 (v1.0.2.0)
+# YouTube 재생 문제 원인 분석 & 해결 (PoToken + NewPipeExtractor)
 
 날짜: 2026-05-24
 브랜치: `feat/potoken-2026-05`
+상태: 검증 완료 — 재생/seek 정상, 화질 개선 패치 적용
 
-## 배경
+---
 
-2025~2026년 YouTube가 InnerTube 클라이언트(iOS/Android/ANDROID_VR 등)에 대해 PoToken(Proof of Origin Token) 인증을 강제하기 시작. PoToken 없이는:
+## 1. 증상
 
-- iOS 클라이언트: metadata 응답은 OK이지만 stream chunk URL이 즉시 403 반환
-- ANDROID_VR: `playabilityStatus=LOGIN_REQUIRED` ("로그인하여 봇이 아님을 확인하세요")
-- ANDROID: 동일하게 PoToken 요구
+1. **재생 직후 "외부 재생 차단" 에러로 중단** — 짧게 재생 후 chunk 403
+2. **seek 시 무조건 재생 불가** — mid-video chunk 가 즉시 403
 
-증상:
-- seek 시 즉시 재생 불가 (새 chunk 요청이 403)
-- 짧은 재생 후 "외부 재생 차단" (subsequent chunk 403)
+logcat 핵심 에러:
+```
+onPlayerError code=2004(ERROR_CODE_IO_BAD_HTTP_STATUS) httpStatus=403
+httpUrl=https://...googlevideo.com/videoplayback?...&c=IOS&...
+retry-403 exhausted after 2 attempts — surfacing error
+```
 
-참고: [yt-dlp PO-Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide), [yt-dlp #15583](https://github.com/yt-dlp/yt-dlp/issues/15583)
+## 2. 원인 분석 — 3개 레이어 동시 필요
 
-## 해결책
+YouTube 외부 클라이언트 재생을 2025~2026 정책 아래 안정적으로 하려면 다음 모두 처리해야 합니다:
 
-**WebView에서 BotGuard JS VM을 실행해 PoToken 발급**
+| 레이어 | 역할 | 누락 시 증상 |
+|---|---|---|
+| **PoToken (BotGuard)** | "봇 아님" 증명 토큰. InnerTube 요청과 stream URL 양쪽에 필요. | LOGIN_REQUIRED 또는 chunk 403 |
+| **n-param deobfuscation** | googlevideo chunk URL 의 `&n=<obfuscated>` 를 `base.js` 의 JS 함수로 변환. | YouTube 가 throttling 적용 또는 mid-video chunk 403 |
+| **signature deobfuscation** | 일부 클라이언트는 `&sig=` cipher 처리 필요. | manifest URL 거부 |
 
-NewPipe의 PoToken 구현([PR #11955](https://github.com/TeamNewPipe/NewPipe/pull/11955))을 SubFeed로 포팅. RxJava 의존성이 없는 프로젝트이므로 Kotlin Coroutines로 변환.
+각 레이어 검증 근거:
+- yt-dlp PO-Token-Guide: iOS/ANDROID 둘 다 PoToken 필수
+- NewPipe `YoutubeThrottlingParameterUtils.java`: n-param 처리 로직
+- NewPipe `YoutubeJavaScriptPlayerManager.kt`: base.js 다운로드 + 캐싱
+- 실제 로그 URL 확인: 우리 IOS 폴백 URL 에 `&n=` 도 `&pot=` 도 없음 → mid-video bytes 거부
+
+**우리 초기 구현의 한계**: PoToken 만 구현. n-param/sig 누락. NewPipe 의 검증된 솔루션을 도입하는 게 가장 합리적.
+
+## 3. 해결 — NewPipeExtractor 라이브러리 도입
+
+### 의존성
+
+```kotlin
+// app/build.gradle.kts
+implementation(libs.newpipe.extractor) {
+    // Firebase Firestore 의 protolite-well-known-types 와 duplicate class 충돌 회피.
+    exclude(group = "com.google.protobuf", module = "protobuf-javalite")
+}
+```
+
+```toml
+# gradle/libs.versions.toml
+newpipe = "v0.26.2"  # 2026-05-23 릴리즈
+newpipe-extractor = { group = "com.github.TeamNewPipe", name = "NewPipeExtractor", version.ref = "newpipe" }
+```
 
 ### 아키텍처
 
 ```
-NewPipeVideoExtractor.getStreamInfo(videoId)
-  ├─ 1순위: tryWebClientWithPoToken(videoId)
-  │   ├─ PoTokenProvider.getWebClientPoToken(videoId)
-  │   │   ├─ fetchVisitorData()                                 # /youtubei/v1/visitor_id
-  │   │   ├─ PoTokenWebView.create(context)                     # BotGuard VM 로드
-  │   │   │   ├─ assets/po_token.html (BgUtils JS)
-  │   │   │   ├─ POST jnn/v1/Create → challenge
-  │   │   │   ├─ runBotGuard(challenge) → botguardResponse + webPoSignalOutput
-  │   │   │   └─ POST jnn/v1/GenerateIT → integrityToken (12h TTL)
-  │   │   ├─ generator.generatePoToken(visitorData) → streamingPot
-  │   │   └─ generator.generatePoToken(videoId) → playerPot
-  │   ├─ POST youtubei/v1/player (WEB context + visitorData + playerPot)
-  │   └─ buildAdaptiveDashManifest(adaptiveFormats, urlSuffix="&pot=$streamingPot")
-  │       → inline DASH MPD with all chunk URLs having &pot=
-  └─ 2~4순위: 기존 iOS/ANDROID_VR/ANDROID fallback
+SubFeedApp.onCreate()
+  ├─ NewPipe.init(SubFeedDownloader, Localization("ko","KR"), ContentCountry("KR"))
+  └─ YoutubeStreamExtractor.setPoTokenProvider(SubFeedPoTokenProvider)
+
+영상 재생 → PlayerViewModel.loadVideo(videoId)
+  → NewPipeVideoExtractor.getStreamInfo(videoId)
+      ├─ ServiceList.YouTube.getStreamExtractor(watchUrl)
+      ├─ extractor.fetchPage()
+      │   ├─ NewPipe 가 InnerTube 호출 (ANDROID/IOS/WEB)
+      │   │   └─ SubFeedPoTokenProvider 가 우리 PoTokenWebView 위임
+      │   │       └─ data/potoken/PoTokenWebView.kt (BgUtils JS)
+      │   ├─ base.js 다운로드 (SubFeedDownloader → OkHttp)
+      │   └─ n-param/sig deobfuscate (Rhino JS 인터프리터)
+      ├─ extractor.videoOnlyStreams → URL n-param 처리 끝남
+      ├─ extractor.audioStreams      → URL n-param 처리 끝남
+      └─ buildDashFromNewPipeStreams() → inline DASH MPD (base64 data: URL)
+          → ExoPlayer 재생
 ```
 
-### 파일 구성
+### 새로 추가된 파일
 
 | 파일 | 역할 | 라인 |
 |---|---|---|
-| `app/src/main/assets/po_token.html` | BgUtils JavaScript (loadBotGuard, snapshot, obtainPoToken) | 127 |
-| `data/potoken/PoTokenException.kt` | PoTokenException, BadWebViewException | 11 |
-| `data/potoken/PoTokenResult.kt` | (visitorData, playerRequestPoToken, streamingDataPoToken) | 7 |
-| `data/potoken/PoTokenGenerator.kt` | suspend interface (generatePoToken, isExpired, close) | 12 |
-| `data/potoken/JavaScriptUtil.kt` | challenge 파싱, base64 ↔ Uint8Array 변환 | 95 |
-| `data/potoken/PoTokenWebView.kt` | WebView에서 BotGuard 실행, JS Interface 콜백 | 205 |
-| `data/potoken/PoTokenProvider.kt` | @Singleton, generator 캐시 + 재시도 로직 | 80 |
+| `app/src/main/assets/po_token.html` | BgUtils JavaScript (BotGuard VM 실행) | 127 |
+| `data/potoken/PoTokenException.kt` | 예외 타입 | 11 |
+| `data/potoken/PoTokenGenerator.kt` | suspend interface | 12 |
+| `data/potoken/PoTokenResult.kt` | data class | 7 |
+| `data/potoken/JavaScriptUtil.kt` | challenge 파싱, base64↔Uint8Array 변환 | 95 |
+| `data/potoken/PoTokenWebView.kt` | WebView에서 BotGuard 실행 (Coroutines 포팅) | 205 |
+| `data/potoken/PoTokenProvider.kt` | @Singleton, generator 캐싱 + 재시도 | 80 |
+| `data/newpipe/SubFeedDownloader.kt` | NewPipe Downloader → OkHttp 어댑터 | 55 |
+| `data/newpipe/SubFeedPoTokenProvider.kt` | 우리 PoToken 을 NewPipe interface 에 plug | 45 |
 
-수정된 파일:
+### 수정된 파일
 
-- `data/NewPipeVideoExtractor.kt`
-  - `@Inject` PoTokenProvider 추가
-  - `tryWebClientWithPoToken()` 메서드 추가 (1순위 경로)
-  - `buildAdaptiveDashManifest()` 에 `urlSuffix` 파라미터 추가
+- `app/build.gradle.kts` — NewPipeExtractor dep + protobuf exclude + packaging excludes
+- `gradle/libs.versions.toml` — v0.26.2 핀
+- `SubFeedApp.kt` — `NewPipe.init()` + `setPoTokenProvider()` 호출
+- `NewPipeVideoExtractor.kt` — InnerTube 직접 호출 제거, NewPipe `getStreamExtractor()` 위임
+- `PlayerViewModel.kt` — friendly error message (LIVE_STREAM_OFFLINE / LOGIN_REQUIRED / UNPLAYABLE / AGE)
+- `PlayerScreen.kt` — onPlayerError 의 httpUrl 로그 truncate 제거 (디버깅 편의)
 
-### 주요 설계 결정
+## 4. 화질 개선 (2025-05-24 추가)
 
-1. **WEB 클라이언트 우선**: iOS/ANDROID_VR/ANDROID 가 PoToken 없으면 모두 실패하는 시점이라 WEB+PoToken을 메인 경로로. 실패 시 legacy 폴백.
+NewPipe 의 `extractor.dashMpdUrl` 이 일부 영상에서 빈 string 반환 → fallback 으로 `videoStreams`(muxed, 360~720p) 사용 → 360p로 떨어짐.
 
-2. **inline DASH 빌드**: WEB 응답의 `adaptiveFormats` 를 받아 각 URL에 `&pot=<streamingPot>` 붙인 inline DASH MPD 빌드. HLS/DASH manifest URL을 직접 쓰지 않는 이유 — manifest 안의 chunk URL에 PoToken을 주입할 수 없어서.
+**해결**: `videoOnlyStreams` + `audioStreams` 결합 inline DASH MPD 빌더 신규 추가. NewPipe 가 URL의 n-param/sig 를 이미 처리한 상태이므로 그대로 BaseURL 에 박으면 됨.
 
-3. **Coroutines 포팅**: NewPipe 원본은 RxJava 기반(Single). 프로젝트가 RxJava를 안 쓰므로 `CompletableDeferred` + `suspendCoroutine` 으로 변환.
+```kotlin
+// NewPipeVideoExtractor.kt:buildDashFromNewPipeStreams()
+// - 비디오: 1080p 이하 모든 트랙을 Representation 으로 노출 → ExoPlayer ABR + 우리 QualityMenu 가 선택
+// - 오디오: 언어별 best-bitrate 1개씩 (audioLocale 기준) → 한국어 더빙 우선
+// - SegmentBase indexRange/initRange 는 itagItem 의 getInitStart/End, getIndexStart/End 활용
+```
 
-4. **PoToken 캐싱**:
-   - integrityToken: 12h TTL (Provider singleton 안에서 유지)
-   - visitorData: 1회 발급 후 재사용
-   - streamingPot: visitorData 변경 안 되면 재사용
-   - playerPot: 영상별로 새로 발급
+우선순위 흐름:
+1. NewPipe `dashMpdUrl` (있으면 사용)
+2. NewPipe `hlsUrl` (라이브)
+3. **`videoOnlyStreams` + `audioStreams` → inline DASH** ← 새로 추가 (대부분의 VOD 가 이 경로)
+4. `videoStreams` (muxed, 마지막 fallback)
 
-5. **WebView 생성은 main thread 강제**: `PoTokenWebView.create()`는 `withContext(Dispatchers.Main)` 내부에서 인스턴스화. Android requirement.
+## 5. 검증
 
-6. **JavaScriptUtil**: NewPipe는 nanojson + okio. SubFeed는 `org.json` + `android.util.Base64` 로 대체.
+테스트 단말: 플립 (R3CX705W62D)
 
-## 테스트
+```
+logcat:
+  PoTokenWebView: init done, expirationSec=43200
+  SubFeedPoToken: PoToken init OK, visitorData(len=48) streamingPot(len=166)
+  SubFeedStream: getStreamInfo OK type=DASH-INLINE video=N audio=M
+  savePositionNow positionMs=1536029  ← 25분 시점 (seek + 시청 확인)
+```
 
-- 빌드: `BUILD SUCCESSFUL`
-- 플립 단말(R3CX705W62D) 검증 진행 중
-- 로그 태그: `SubFeedPoToken`, `PoTokenWebView`, `SubFeedStream`
+## 6. 알려진 제약 / 위험
 
-## 알려진 제약
+- **PoToken WebView 초기화**: 첫 영상 재생 시 BotGuard 다운로드 + JS 실행으로 2~5초 지연. 이후 12시간 캐시.
+- **YouTube 의 base.js / botguard.js 변경**: NewPipeExtractor 가 추적. 라이브러리 업데이트로 대응.
+- **APK 크기 증가**: NewPipeExtractor + Rhino 로 약 2MB.
+- **GPL-3.0**: NewPipeExtractor 라이센스. 개인 사용 전제라 무관.
+- **Protobuf 충돌**: NewPipe 의 `protobuf-javalite` exclude 로 Firebase Firestore 우선. Firestore 정상 동작 확인 필요 (현재 시청 위치 동기화 검증됨).
 
-- WebView 초기화에 2~5초 소요 (첫 영상 재생 시 지연)
-- integrityToken 만료 시 자동 재생성
-- WebView 미지원 단말에서는 legacy 클라이언트로 자동 폴백
-- YouTube가 BotGuard JS 인터페이스를 바꾸면 po_token.html 갱신 필요 (NewPipe 추적)
+## 7. 참고
+
+- yt-dlp PoToken Guide: https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
+- NewPipe PoToken PR: https://github.com/TeamNewPipe/NewPipe/pull/11955
+- 의사결정 근거: `docs/20260524_newpipe_solution_analysis.md`

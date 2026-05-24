@@ -2,6 +2,21 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.1.0.0] - 2026-05-24
+
+### Added
+- YouTube PoToken (BotGuard) 인증 도입 — 2026년 YouTube 외부 클라이언트 차단 정책 대응. WebView에서 BgUtils JS 실행해 토큰 발급
+- NewPipeExtractor v0.26.2 라이브러리 통합 — n-param/signature deobfuscation 및 DASH manifest 처리 자동화
+
+### Fixed
+- seek 시 chunk 403으로 재생 불가 → NewPipe의 n-param JavaScript deobfuscation 으로 해소
+- 짧은 재생 후 "외부 재생 차단" 에러 → PoToken + n-param 처리로 chunk URL 정상화
+- 라이브 방송 예약 / 연령 제한 / 비공개 영상 등 상태별 친화적 에러 메시지 표시
+
+### Changed
+- 화질 개선 — videoOnlyStreams + audioStreams 결합 inline DASH MPD 빌더로 1080p+ 재생 지원 (기존 muxed 360p 한계 해소)
+- 한국어 더빙 등 멀티 언어 오디오 트랙 선택 정상화 (audioLocale 기반 분리)
+
 ## [1.0.1.0] - 2026-05-24
 
 ### Fixed
