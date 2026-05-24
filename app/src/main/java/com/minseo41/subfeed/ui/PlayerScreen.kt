@@ -188,7 +188,7 @@ fun PlayerScreen(
                 val urlHead = info?.streamUrl?.take(120)?.replace("\n", " ") ?: "<none>"
                 val isHls = info?.streamUrl?.startsWith("hls:") == true
                 val httpStatus = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode ?: -1
-                val httpUrl = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.dataSpec?.uri?.toString()?.take(160)
+                val httpUrl = (error.cause as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.dataSpec?.uri?.toString()
                 android.util.Log.e(
                     "SubFeedPlayer",
                     "onPlayerError code=${error.errorCode}(${error.errorCodeName}) msg=${error.message} " +

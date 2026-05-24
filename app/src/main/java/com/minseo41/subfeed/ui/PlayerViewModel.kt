@@ -131,8 +131,17 @@ class PlayerViewModel @Inject constructor(
         _uiState.update { it.copy(error = message, isLoading = false) }
     }
 
-    private fun friendlyExtractorMessage(e: Throwable): String =
-        "이 영상은 재생할 수 없습니다.\n(YouTube 외부 재생 차단)"
+    private fun friendlyExtractorMessage(e: Throwable): String {
+        val msg = e.message.orEmpty()
+        return when {
+            msg.contains("LIVE_STREAM_OFFLINE") -> "아직 시작되지 않은 라이브 방송입니다."
+            msg.contains("LOGIN_REQUIRED") -> "이 영상은 로그인이 필요합니다.\n(연령 제한 또는 멤버십 영상)"
+            msg.contains("UNPLAYABLE") -> "이 영상은 재생할 수 없습니다.\n(저작권 또는 지역 제한)"
+            msg.contains("AGE_VERIFICATION_REQUIRED") -> "연령 확인이 필요한 영상입니다."
+            msg.contains("ERROR") && msg.contains("not found") -> "영상을 찾을 수 없습니다."
+            else -> "이 영상은 재생할 수 없습니다.\n(YouTube 외부 재생 차단)"
+        }
+    }
 
     private fun startBannerCountdown() {
         bannerJob?.cancel()
