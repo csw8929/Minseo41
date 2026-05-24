@@ -2,6 +2,11 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.1.1.0] - 2026-05-25
+
+### Fixed
+- RSS 피드 갱신 시 영상 제목·썸네일이 변경돼도 DB에 반영되지 않던 문제 — insertIgnoreAll 후 기존 행의 title/thumbnailUrl을 updateMeta로 갱신
+
 ## [1.1.0.0] - 2026-05-24
 
 ### Added
