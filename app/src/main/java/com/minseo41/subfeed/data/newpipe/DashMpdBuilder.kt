@@ -1,6 +1,7 @@
 package com.minseo41.subfeed.data.newpipe
 
 import android.util.Base64
+import android.util.Log
 import org.schabi.newpipe.extractor.services.youtube.ItagItem
 import org.schabi.newpipe.extractor.stream.AudioStream
 import org.schabi.newpipe.extractor.stream.VideoStream
@@ -26,19 +27,30 @@ class DashMpdBuilder @Inject constructor() {
         val videos = videoStreams
             .filter { it.height in 1..1080 && hasRanges(it.itagItem!!) }
             .sortedBy { it.height }
-        if (videos.isEmpty()) return null
+        if (videos.isEmpty()) {
+            val heightSummary = videoStreams.map { it.height }.sorted()
+            val noRangesCount = videoStreams.count { it.itagItem != null && !hasRanges(it.itagItem!!) }
+            Log.w(TAG, "build → null: 필터 후 video 0개. 원본=${videoStreams.size} heights=$heightSummary noRanges=$noRangesCount (1080p 이하 + initRange/indexRange 필요)")
+            return null
+        }
 
         // 언어별로 best bitrate 1개씩만. audioTrackId/audioLocale 없으면 단일 트랙.
         data class BestAudio(val stream: AudioStream, val bitrate: Int)
         val audioByLang = linkedMapOf<String?, BestAudio>()
+        var audioNoItag = 0
+        var audioNoRanges = 0
         for (a in audioStreams) {
-            if (a.itagItem == null || !hasRanges(a.itagItem!!)) continue
+            if (a.itagItem == null) { audioNoItag++; continue }
+            if (!hasRanges(a.itagItem!!)) { audioNoRanges++; continue }
             val lang = a.audioLocale?.language ?: a.audioTrackId?.split(".")?.firstOrNull { it.length in 2..3 && it.all { c -> c.isLetter() } }
             val bw = a.averageBitrate.takeIf { it > 0 } ?: (a.itagItem!!.avgBitrate.takeIf { it > 0 } ?: 128000)
             val prev = audioByLang[lang]
             if (prev == null || bw > prev.bitrate) audioByLang[lang] = BestAudio(a, bw)
         }
-        if (audioByLang.isEmpty()) return null
+        if (audioByLang.isEmpty()) {
+            Log.w(TAG, "build → null: 필터 후 audio 0개. 원본=${audioStreams.size} noItag=$audioNoItag noRanges=$audioNoRanges")
+            return null
+        }
 
         fun String.xmlEscape() = replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
         fun segBase(initStart: Int, initEnd: Int, idxStart: Int, idxEnd: Int): String =
@@ -82,9 +94,16 @@ class DashMpdBuilder @Inject constructor() {
             }
             append("</Period></MPD>")
         }
+        val heights = videos.map { it.height }
+        val langs = audioByLang.keys.map { it ?: "<unknown>" }
+        Log.d(TAG, "build OK: video=${videos.size} heights=$heights audio=${audioByLang.size} langs=$langs mpdLen=${mpd.length}")
         return Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
     }
 
     private fun hasRanges(item: ItagItem): Boolean =
         item.getInitEnd() > 0 && item.getIndexEnd() > 0
+
+    private companion object {
+        private const val TAG = "SubFeedNpDash"
+    }
 }

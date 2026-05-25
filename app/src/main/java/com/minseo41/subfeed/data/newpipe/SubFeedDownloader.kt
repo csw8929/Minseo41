@@ -1,5 +1,6 @@
 package com.minseo41.subfeed.data.newpipe
 
+import android.util.Log
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request as OkRequest
@@ -40,16 +41,43 @@ object SubFeedDownloader : Downloader() {
             for (v in values) builder.addHeader(key, v)
         }
 
-        return client.newCall(builder.build()).execute().use { rsp ->
-            val responseBody = rsp.body?.string().orEmpty()
-            val responseHeaders: Map<String, List<String>> = rsp.headers.toMultimap()
-            Response(
-                rsp.code,
-                rsp.message,
-                responseHeaders,
-                responseBody,
-                rsp.request.url.toString(),
-            )
+        // URL path summary 만 로그 (signature/n-param 등 sensitive query 제외)
+        val urlSummary = summarizeUrl(url)
+        val bodySize = data?.size ?: 0
+        val t0 = System.currentTimeMillis()
+        try {
+            return client.newCall(builder.build()).execute().use { rsp ->
+                val responseBody = rsp.body?.string().orEmpty()
+                val responseHeaders: Map<String, List<String>> = rsp.headers.toMultimap()
+                val elapsed = System.currentTimeMillis() - t0
+                val redirected = rsp.request.url.toString() != url
+                val redirectedTag = if (redirected) " redirected=Y" else ""
+                if (rsp.code in 200..299) {
+                    Log.d(TAG, "$httpMethod $urlSummary → ${rsp.code} body=${responseBody.length}B ${elapsed}ms reqBody=${bodySize}B$redirectedTag")
+                } else {
+                    Log.w(TAG, "$httpMethod $urlSummary → ${rsp.code} ${rsp.message} body=${responseBody.length}B ${elapsed}ms$redirectedTag")
+                }
+                Response(
+                    rsp.code,
+                    rsp.message,
+                    responseHeaders,
+                    responseBody,
+                    rsp.request.url.toString(),
+                )
+            }
+        } catch (e: Exception) {
+            val elapsed = System.currentTimeMillis() - t0
+            Log.e(TAG, "$httpMethod $urlSummary → ${e.javaClass.simpleName} after ${elapsed}ms: ${e.message}")
+            throw e
         }
     }
+
+    // URL → "host/path[truncated]" — query string은 제거 (sig/n-param 노출 방지)
+    private fun summarizeUrl(url: String): String {
+        val noQuery = url.substringBefore('?')
+        val pathLen = noQuery.length
+        return if (pathLen > 90) noQuery.take(90) + "…" else noQuery
+    }
+
+    private const val TAG = "SubFeedNpDownload"
 }
