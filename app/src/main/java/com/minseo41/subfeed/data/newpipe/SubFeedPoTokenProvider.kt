@@ -20,23 +20,44 @@ class SubFeedPoTokenProvider @Inject constructor(
     private val ourProvider: PoTokenProvider,
 ) : NpPoTokenProvider {
 
-    override fun getWebClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId)
+    override fun getWebClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId, "WEB")
 
-    override fun getWebEmbedClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId)
+    override fun getWebEmbedClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId, "WEB_EMBED")
 
-    override fun getAndroidClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId)
+    override fun getAndroidClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId, "ANDROID")
 
-    override fun getIosClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId)
+    override fun getIosClientPoToken(videoId: String): NpPoTokenResult? = obtainSafe(videoId, "IOS")
 
     // NewPipe 가 동기 호출하므로 runBlocking 으로 우리 suspend API 를 바라보게 함.
     // PoTokenWebView 캐싱 덕에 첫 호출만 2~5초, 이후는 ms 단위.
-    private fun obtainSafe(videoId: String): NpPoTokenResult? = runCatching {
-        runBlocking {
-            ourProvider.getWebClientPoToken(videoId)?.let {
-                NpPoTokenResult(it.visitorData, it.playerRequestPoToken, it.streamingDataPoToken)
+    private fun obtainSafe(videoId: String, client: String): NpPoTokenResult? {
+        val t0 = System.currentTimeMillis()
+        return runCatching {
+            runBlocking {
+                val ours = ourProvider.getWebClientPoToken(videoId)
+                if (ours == null) {
+                    val elapsed = System.currentTimeMillis() - t0
+                    Log.w(TAG, "client=$client videoId=$videoId → null PoToken (${elapsed}ms)")
+                    null
+                } else {
+                    val elapsed = System.currentTimeMillis() - t0
+                    // 토큰 값 자체는 절대 안 찍음. prefix 만으로 캐시 hit/miss 추적 가능.
+                    val cached = if (elapsed < 200) " [cached]" else ""
+                    Log.d(
+                        TAG,
+                        "client=$client videoId=$videoId → ok (${elapsed}ms)$cached " +
+                            "visitor=${ours.visitorData.take(8)}… " +
+                            "player=${ours.playerRequestPoToken.take(8)}… " +
+                            "streaming=${ours.streamingDataPoToken.take(8)}…",
+                    )
+                    NpPoTokenResult(ours.visitorData, ours.playerRequestPoToken, ours.streamingDataPoToken)
+                }
             }
-        }
-    }.onFailure { Log.w(TAG, "PoToken request failed for $videoId", it) }.getOrNull()
+        }.onFailure {
+            val elapsed = System.currentTimeMillis() - t0
+            Log.w(TAG, "client=$client videoId=$videoId → failed after ${elapsed}ms", it)
+        }.getOrNull()
+    }
 
     companion object {
         private const val TAG = "SubFeedNpPoToken"

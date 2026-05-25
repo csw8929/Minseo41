@@ -24,6 +24,7 @@ class NewPipeStreamFetcher @Inject constructor(
 ) {
 
     suspend fun fetch(videoId: String): StreamInfo = withContext(Dispatchers.IO) {
+        Log.d(TAG, "fetch start videoId=$videoId")
         val watchUrl = "https://www.youtube.com/watch?v=$videoId"
         val service = ServiceList.YouTube
         val linkHandler = service.streamLHFactory.fromUrl(watchUrl)
@@ -31,14 +32,35 @@ class NewPipeStreamFetcher @Inject constructor(
 
         // PoToken 발급 + InnerTube 요청 + base.js 파싱 + n-param/sig deobfuscate
         // 일반적으로 첫 호출은 5~10초 (WebView 워밍업 + base.js 다운로드), 이후는 ms 단위.
-        extractor.fetchPage()
+        val fetchStart = System.currentTimeMillis()
+        runCatching { extractor.fetchPage() }
+            .onFailure {
+                val elapsed = System.currentTimeMillis() - fetchStart
+                Log.e(TAG, "fetchPage failed videoId=$videoId after ${elapsed}ms type=${it.javaClass.simpleName} msg=${it.message}")
+                throw it
+            }
+        val fetchElapsed = System.currentTimeMillis() - fetchStart
+        Log.d(TAG, "fetchPage OK videoId=$videoId in ${fetchElapsed}ms")
 
         val durationSec = extractor.length
         val description = runCatching { extractor.description?.content.orEmpty() }.getOrDefault("")
         val chapters = chapterParser.parse(description)
 
-        // 1순위: DASH manifest URL — n-deobfuscated chunk URL 포함, ExoPlayer 가 직접 fetch.
+        // Stream 가용성 진단용 카운트
         val dashUrl = runCatching { extractor.dashMpdUrl }.getOrNull().orEmpty()
+        val hlsUrl = runCatching { extractor.hlsUrl }.getOrNull().orEmpty()
+        val videoOnlyRaw = runCatching { extractor.videoOnlyStreams }.getOrDefault(emptyList())
+        val audioStreamsRaw = runCatching { extractor.audioStreams }.getOrDefault(emptyList())
+        val videoStreamsRaw = runCatching { extractor.videoStreams }.getOrDefault(emptyList())
+        Log.d(
+            TAG,
+            "streams videoId=$videoId durationSec=$durationSec " +
+                "dashUrl=${dashUrl.isNotEmpty()} hlsUrl=${hlsUrl.isNotEmpty()} " +
+                "videoOnly=${videoOnlyRaw.size} audio=${audioStreamsRaw.size} " +
+                "videoMuxed=${videoStreamsRaw.size} chapters=${chapters.size}",
+        )
+
+        // 1순위: DASH manifest URL — n-deobfuscated chunk URL 포함, ExoPlayer 가 직접 fetch.
         if (dashUrl.isNotEmpty()) {
             Log.d(TAG, "fetch OK videoId=$videoId type=DASH durationSec=$durationSec urlHead=${dashUrl.take(80)}")
             return@withContext StreamInfo(
@@ -50,9 +72,8 @@ class NewPipeStreamFetcher @Inject constructor(
         }
 
         // 2순위: HLS manifest (라이브/일부 영상)
-        val hlsUrl = runCatching { extractor.hlsUrl }.getOrNull().orEmpty()
         if (hlsUrl.isNotEmpty()) {
-            Log.d(TAG, "fetch OK videoId=$videoId type=HLS durationSec=$durationSec urlHead=${hlsUrl.take(80)}")
+            Log.d(TAG, "fetch OK videoId=$videoId type=HLS (DASH not available) durationSec=$durationSec urlHead=${hlsUrl.take(80)}")
             return@withContext StreamInfo(
                 streamUrl = "hls:$hlsUrl",
                 captionTracks = collectCaptions(extractor),
@@ -63,28 +84,37 @@ class NewPipeStreamFetcher @Inject constructor(
 
         // 3순위: videoOnlyStreams + audioStreams 로 inline DASH 빌드 (고화질 1080p+)
         // videoStreams (muxed) 는 보통 360~720p 한계라 마지막 fallback 으로 밀어둠.
-        val videoOnly = runCatching { extractor.videoOnlyStreams }.getOrDefault(emptyList())
-            .filter { it.content.isNotEmpty() && it.itagItem != null }
-        val audioStreams = runCatching { extractor.audioStreams }.getOrDefault(emptyList())
-            .filter { it.content.isNotEmpty() && it.itagItem != null }
+        val videoOnly = videoOnlyRaw.filter { it.content.isNotEmpty() && it.itagItem != null }
+        val audioStreams = audioStreamsRaw.filter { it.content.isNotEmpty() && it.itagItem != null }
+        if (videoOnly.size != videoOnlyRaw.size || audioStreams.size != audioStreamsRaw.size) {
+            Log.d(
+                TAG,
+                "filtered streams videoId=$videoId " +
+                    "videoOnly=${videoOnly.size}/${videoOnlyRaw.size} " +
+                    "audio=${audioStreams.size}/${audioStreamsRaw.size} (dropped empty content or null itag)",
+            )
+        }
         if (videoOnly.isNotEmpty() && audioStreams.isNotEmpty()) {
             val mpdB64 = dashMpdBuilder.build(videoOnly, audioStreams, durationSec.toLong())
             if (mpdB64 != null) {
-                Log.d(TAG, "fetch OK videoId=$videoId type=DASH-INLINE video=${videoOnly.size} audio=${audioStreams.size} durationSec=$durationSec")
+                Log.d(TAG, "fetch OK videoId=$videoId type=DASH-INLINE video=${videoOnly.size} audio=${audioStreams.size} durationSec=$durationSec mpdB64Len=${mpdB64.length}")
                 return@withContext StreamInfo(
                     streamUrl = "dash:data:application/dash+xml;base64,$mpdB64",
                     captionTracks = collectCaptions(extractor),
                     durationSeconds = durationSec.toLong(),
                     chapters = chapters,
                 )
+            } else {
+                Log.w(TAG, "DASH-INLINE 빌드 실패 videoId=$videoId — DashMpdBuilder가 null 반환 (filtering rejected all tracks). MUXED 로 fallback")
             }
+        } else {
+            Log.w(TAG, "DASH-INLINE skip videoId=$videoId — videoOnly=${videoOnly.size} audio=${audioStreams.size}, MUXED 로 fallback")
         }
 
         // 4순위: 최고 해상도 video stream (muxed, 보통 360~720p) — last resort
-        val videoStream = runCatching { extractor.videoStreams }.getOrDefault(emptyList())
-            .maxByOrNull { it.height }
+        val videoStream = videoStreamsRaw.maxByOrNull { it.height }
         if (videoStream != null && videoStream.content.isNotEmpty()) {
-            Log.d(TAG, "fetch OK videoId=$videoId type=MUXED ${videoStream.height}p urlHead=${videoStream.content.take(80)}")
+            Log.w(TAG, "fetch DEGRADED videoId=$videoId type=MUXED ${videoStream.height}p urlHead=${videoStream.content.take(80)}")
             return@withContext StreamInfo(
                 streamUrl = videoStream.content,
                 captionTracks = collectCaptions(extractor),
@@ -93,6 +123,9 @@ class NewPipeStreamFetcher @Inject constructor(
             )
         }
 
+        Log.e(TAG, "fetch FAIL videoId=$videoId — DASH/HLS/INLINE-DASH/MUXED 모두 비어있음. " +
+            "dashUrl=${dashUrl.isNotEmpty()} hlsUrl=${hlsUrl.isNotEmpty()} " +
+            "videoOnly=${videoOnlyRaw.size} audio=${audioStreamsRaw.size} videoMuxed=${videoStreamsRaw.size}")
         error("재생 가능한 stream URL 없음 — DASH/HLS/INLINE-DASH/MUXED 모두 비어 있음")
     }
 
