@@ -2,7 +2,7 @@ package com.minseo41.subfeed.data.potoken
 
 import android.content.Context
 import android.util.Log
-import com.minseo41.subfeed.data.OkHttpDownloader
+import com.minseo41.subfeed.data.http.OkHttpDownloader
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton

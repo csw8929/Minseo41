@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.CaptionTrack
 import com.minseo41.subfeed.data.Cue
-import com.minseo41.subfeed.data.OkHttpDownloader
+import com.minseo41.subfeed.data.http.OkHttpDownloader
 import com.minseo41.subfeed.data.StreamInfo
 import com.minseo41.subfeed.data.SyncRepo
 import com.minseo41.subfeed.data.TimedTextToSrt
