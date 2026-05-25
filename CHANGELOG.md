@@ -13,6 +13,11 @@ All notable changes to SubFeed are documented in this file.
 - `data/newpipe/README.md` — 우리가 의존하는 NewPipe API contract (v0.26.2 기준)
 - `.claude/commands/sync-newpipe.md` — `/sync-newpipe` project-scope 슬래시 명령 (재생 깨질 때 NewPipe 최신화 보조)
 
+## [1.1.1.0] - 2026-05-25
+
+### Fixed
+- RSS 피드 갱신 시 영상 제목·썸네일이 변경돼도 DB에 반영되지 않던 문제 — insertIgnoreAll 후 기존 행의 title/thumbnailUrl을 updateMeta로 갱신
+
 ## [1.1.0.0] - 2026-05-24
 
 ### Added
