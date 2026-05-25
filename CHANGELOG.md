@@ -2,6 +2,17 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.1.2.0] - 2026-05-25
+
+### Changed
+- NewPipe Extractor 의존 코드를 `data/newpipe/` 패키지로 격리 — 라이브러리 업데이트 시 영향 범위를 한 폴더로 좁힘. 동작 변경 없음.
+
+### Added
+- `docs/newpipe/` 서브폴더에 NewPipe 관련 문서 통합 (도입 분석, PoToken 구현, 활용 구조 개요, 유지보수 가이드)
+- `docs/newpipe/maintenance.md` — 살아있는 유지보수 가이드 (업데이트 절차, 위험 신호, 깨짐 사례 누적)
+- `data/newpipe/README.md` — 우리가 의존하는 NewPipe API contract (v0.26.2 기준)
+- `.claude/commands/sync-newpipe.md` — `/sync-newpipe` project-scope 슬래시 명령 (재생 깨질 때 NewPipe 최신화 보조)
+
 ## [1.1.0.0] - 2026-05-24
 
 ### Added
