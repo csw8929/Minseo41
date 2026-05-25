@@ -24,8 +24,9 @@ local.properties
 /subscriptions.opml
 /subscriptions.json
 
-# Claude Code 로컬 설정
-.claude/
+# Claude Code 로컬 설정 (worktrees 등은 무시, commands 는 프로젝트 공유)
+.claude/*
+!.claude/commands/
 
 # Gradle wrapper jar는 포함 (wrapper properties만으로 빌드 불가)
 !gradle/wrapper/gradle-wrapper.jar

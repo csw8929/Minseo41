@@ -8,7 +8,7 @@ import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
-import com.minseo41.subfeed.data.OkHttpDownloader
+import com.minseo41.subfeed.data.http.OkHttpDownloader
 import java.time.Instant
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
