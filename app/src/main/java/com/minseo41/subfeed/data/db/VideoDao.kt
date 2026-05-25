@@ -18,6 +18,14 @@ interface VideoDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIgnoreAll(videos: List<VideoEntity>): List<Long>
 
+    @Query(
+        """
+        UPDATE videos SET title = :title, thumbnailUrl = :thumbnailUrl
+        WHERE videoId = :videoId
+        """
+    )
+    suspend fun updateMeta(videoId: String, title: String, thumbnailUrl: String)
+
     @Query("SELECT * FROM videos WHERE videoId = :videoId LIMIT 1")
     suspend fun getById(videoId: String): VideoEntity?
 

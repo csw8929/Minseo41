@@ -91,7 +91,10 @@ class RefreshFeedWorker @AssistedInject constructor(
                 )
             }
 
-            videoDao.insertIgnoreAll(entities)
+            val inserted = videoDao.insertIgnoreAll(entities)
+            inserted.zip(entities).forEach { (rowId, entity) ->
+                if (rowId == -1L) videoDao.updateMeta(entity.videoId, entity.title, entity.thumbnailUrl)
+            }
             videoDao.pruneChannel(channel.id, cutoffMs, channel.maxCount)
             channelDao.markFetchSuccess(channel.id, nowMs)
         }.onFailure { e ->
