@@ -4,6 +4,7 @@ import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
@@ -466,6 +467,17 @@ fun PlayerScreen(
                     fontSize = 15.sp,
                     textAlign = TextAlign.Center,
                 )
+                val context = LocalContext.current
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+                        )
+                    },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                ) {
+                    Text("브라우저로 열기")
+                }
                 OutlinedButton(
                     onClick = {
                         isExiting = true
