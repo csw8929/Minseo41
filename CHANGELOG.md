@@ -2,6 +2,11 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.2.0.0] - 2026-05-29
+
+### Added
+- 재생 실패 화면에 "브라우저로 열기" 버튼 추가 — 인앱 재생이 막힌 영상을 YouTube 앱/브라우저로 넘겨 볼 수 있음. NewPipe·Tubular 등 extractor 기반 앱들이 공통으로 쓰는 폴백 전략과 동일.
+
 ## [1.1.2.0] - 2026-05-25
 
 ### Changed
