@@ -4,6 +4,8 @@
 관련 브랜치: `experiment/potoken-web-only-2026-05` (폐기), `feature/open-in-browser-fallback-2026-05` (채택, PR #25)
 결론: **이 아키텍처(NewPipe Extractor + WebView WEB PoToken)로는 인앱 고화질 일관 재생 불가.** 360p + 브라우저 폴백이 현실적 최선.
 
+> **후속 (2026-06-10)**: NewPipe v0.26.3이 SABR 미강제 visionOS 클라이언트(PoToken 불요)를 추가하면서 이 결론은 일부 무효화됨 — 고화질 인앱 재생 경로 복구. 상세: [`newpipe/20260610_newpipe-v0.26.3-sabr-fix-analysis.md`](newpipe/20260610_newpipe-v0.26.3-sabr-fix-analysis.md)
+
 ## 증상
 
 - 모든 영상이 360p muxed 로만 재생됨 (adaptive 고화질 스트림이 안 잡힘).

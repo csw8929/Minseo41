@@ -1,5 +1,9 @@
 package com.minseo41.subfeed.ui
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -28,6 +32,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -57,6 +62,23 @@ fun FeedScreen(
     val favoriteIds by viewModel.favoriteIds.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val refreshMessage by viewModel.refreshMessage.collectAsState()
+    val context = LocalContext.current
+
+    val handleVideoClick: (String) -> Unit = { videoId ->
+        val prefs = context.getSharedPreferences(PlayerPrefs.NAME, android.content.Context.MODE_PRIVATE)
+        val mode = prefs.getString(PlayerPrefs.KEY_PLAYBACK_MODE, PlayerPrefs.PLAYBACK_MODE_YOUTUBE)
+        if (mode == PlayerPrefs.PLAYBACK_MODE_YOUTUBE) {
+            viewModel.recordExternalLaunch(videoId)
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$videoId"))
+            try {
+                context.startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                Toast.makeText(context, "YouTube 앱을 찾을 수 없습니다", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            onVideoClick(videoId)
+        }
+    }
     val infiniteTransition = rememberInfiniteTransition(label = "refresh")
     val spinAngle by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -136,13 +158,13 @@ fun FeedScreen(
                 FeedTab.Today -> TodayContent(
                     state = uiState,
                     favoriteIds = favoriteIds,
-                    onVideoClick = onVideoClick,
+                    onVideoClick = handleVideoClick,
                     onToggleFavorite = viewModel::toggleFavorite,
                     onRetry = { viewModel.refreshNow() },
                 )
                 FeedTab.Favorites -> FavoritesContent(
                     favorites = favorites,
-                    onVideoClick = onVideoClick,
+                    onVideoClick = handleVideoClick,
                     onToggleFavorite = viewModel::toggleFavorite,
                 )
             }

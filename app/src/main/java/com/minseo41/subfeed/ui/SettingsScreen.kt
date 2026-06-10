@@ -145,6 +145,19 @@ fun SettingsScreen(
 
             Text("재생 기본값", style = MaterialTheme.typography.titleMedium)
 
+            Text("재생 방식", style = MaterialTheme.typography.bodyMedium)
+            PlaybackModeRow(
+                selected = uiState.playbackMode,
+                onSelect = { viewModel.setPlaybackMode(it) },
+            )
+            Text(
+                if (uiState.playbackMode == PlayerPrefs.PLAYBACK_MODE_YOUTUBE)
+                    "영상 탭 시 YouTube 앱으로 이동합니다. NewPipe 의존 없이 안정적으로 재생됩니다."
+                else
+                    "앱 내 플레이어로 재생합니다. 광고 없이 시청하지만 YouTube 정책 변경 시 동작 불가할 수 있습니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
             Text("기본 화질", style = MaterialTheme.typography.bodyMedium)
             QualityDefaultRow(
                 selected = uiState.defaultMaxHeight,
@@ -299,6 +312,27 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PlaybackModeRow(selected: String, onSelect: (String) -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        FilterChip(
+            selected = selected == PlayerPrefs.PLAYBACK_MODE_YOUTUBE,
+            onClick = { onSelect(PlayerPrefs.PLAYBACK_MODE_YOUTUBE) },
+            label = { Text("YouTube 앱") },
+        )
+        FilterChip(
+            selected = selected == PlayerPrefs.PLAYBACK_MODE_INAPP,
+            onClick = { onSelect(PlayerPrefs.PLAYBACK_MODE_INAPP) },
+            label = { Text("인앱 플레이어") },
+        )
     }
 }
 

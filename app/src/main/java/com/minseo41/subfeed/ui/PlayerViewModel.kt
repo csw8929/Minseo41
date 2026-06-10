@@ -260,6 +260,9 @@ object PlayerPrefs {
     const val KEY_CAPTION_SCALE = "captionScale"
     const val KEY_ORIENTATION_LOCKED = "orientationLocked"
     const val KEY_DEFAULT_FULLSCREEN = "defaultFullscreen"
+    const val KEY_PLAYBACK_MODE = "playbackMode"
+    const val PLAYBACK_MODE_YOUTUBE = "youtube"
+    const val PLAYBACK_MODE_INAPP = "inapp"
 
     val QUALITY_OPTIONS: List<Int> = listOf(0, 1080, 720, 480, 360)
     val CAPTION_SCALE_OPTIONS: List<Float> = listOf(1.0f, 1.5f, 2.0f)

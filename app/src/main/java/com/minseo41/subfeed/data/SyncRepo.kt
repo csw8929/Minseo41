@@ -3,7 +3,9 @@ package com.minseo41.subfeed.data
 import android.util.Log
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import com.minseo41.subfeed.data.db.WatchPositionDao
 import com.minseo41.subfeed.data.db.WatchPositionEntity
 import com.minseo41.subfeed.model.WatchPosition
@@ -41,6 +43,48 @@ class SyncRepo @Inject constructor(
 
     fun savePositionDetached(videoId: String, positionMs: Long) {
         detachedScope.launch { savePosition(videoId, positionMs) }
+    }
+
+    fun recordExternalLaunchDetached(videoId: String) {
+        detachedScope.launch {
+            val u = uid ?: return@launch
+            runCatching {
+                firestore.collection("users")
+                    .document(u)
+                    .collection("positions")
+                    .document(videoId)
+                    .set(mapOf("launchedAt" to Timestamp.now()), SetOptions.merge())
+                    .await()
+            }.onSuccess {
+                Log.d(TAG, "recordExternalLaunch ok: videoId=$videoId")
+            }.onFailure { e ->
+                Log.e(TAG, "recordExternalLaunch failed: videoId=$videoId", e)
+            }
+        }
+    }
+
+    suspend fun fetchWatchedVideoIds(videoIds: List<String>): Set<String> {
+        val u = uid ?: return emptySet()
+        val result = mutableSetOf<String>()
+        for (chunk in videoIds.chunked(30)) {
+            runCatching {
+                firestore.collection("users")
+                    .document(u)
+                    .collection("positions")
+                    .whereIn(FieldPath.documentId(), chunk)
+                    .get()
+                    .await()
+            }.onSuccess { snapshot ->
+                for (doc in snapshot.documents) {
+                    if (doc.contains("launchedAt") || (doc.getLong("positionMs") ?: 0L) > 0L) {
+                        result.add(doc.id)
+                    }
+                }
+            }.onFailure { e ->
+                Log.e(TAG, "fetchWatchedVideoIds chunk failed", e)
+            }
+        }
+        return result
     }
 
     // 충돌 해소: "최신 updatedAt이 이긴다" — 큰 값 우선이 아닌 시각 우선.

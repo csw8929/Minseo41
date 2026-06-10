@@ -1,10 +1,13 @@
 package com.minseo41.subfeed.ui
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import com.minseo41.subfeed.data.FavoriteRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
+import com.minseo41.subfeed.data.SyncRepo
+import com.minseo41.subfeed.data.db.VideoDao
 import com.minseo41.subfeed.data.refresh.RefreshScheduler
 import com.minseo41.subfeed.model.VideoItem
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -33,6 +36,8 @@ class FeedViewModel @Inject constructor(
     subscriptionRepo: SubscriptionRepo,
     private val favoriteRepo: FavoriteRepo,
     private val refreshScheduler: RefreshScheduler,
+    private val syncRepo: SyncRepo,
+    private val videoDao: VideoDao,
 ) : ViewModel() {
 
     val uiState: StateFlow<FeedUiState> = subscriptionRepo.observeTodayFeed()
@@ -86,12 +91,37 @@ class FeedViewModel @Inject constructor(
                     "갱신 실패"
                 }
             }
+            bulkSyncRemoteWatched()
         }
+    }
+
+    fun recordExternalLaunch(videoId: String) {
+        viewModelScope.launch {
+            runCatching { videoDao.markRead(videoId) }
+                .onFailure { Log.w(TAG, "markRead 실패: videoId=$videoId", it) }
+        }
+        syncRepo.recordExternalLaunchDetached(videoId)
+    }
+
+    private suspend fun bulkSyncRemoteWatched() {
+        val videoIds = (uiState.value as? FeedUiState.Success)?.videos?.map { it.id }
+            ?: return
+        if (videoIds.isEmpty()) return
+        runCatching {
+            val watchedIds = syncRepo.fetchWatchedVideoIds(videoIds)
+            for (id in watchedIds) {
+                videoDao.markRead(id)
+            }
+        }.onFailure { Log.w(TAG, "bulkSyncRemoteWatched 실패", it) }
     }
 
     fun toggleFavorite(video: VideoItem) {
         viewModelScope.launch {
             favoriteRepo.toggle(video)
         }
+    }
+
+    companion object {
+        private const val TAG = "SubFeedFeedVM"
     }
 }

@@ -2,6 +2,19 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.3.0.0] - 2026-06-10
+
+### Added
+- **재생 방식 설정 토글** — 설정 화면 "재생 기본값" 섹션에 "YouTube 앱 / 인앱 플레이어" 선택 추가. 기본값은 YouTube 앱.
+- **YouTube 앱 기본 재생** — 영상 탭 시 `ACTION_VIEW` 인텐트로 YouTube 앱을 직접 실행. NewPipe 추출 없이 안정적으로 재생 가능. YouTube 앱 비활성화 시 브라우저로 자동 폴백.
+- **외부 실행 기록** — YouTube 앱으로 열면 로컬 미시청 표시(파란 점) 즉시 제거 + Firestore에 `launchedAt` 타임스탬프를 merge 기록. 기존 `positionMs` 보존.
+- **기기 간 시청 표시 동기화** — 피드 수동 갱신 시 Firestore에서 오늘 영상의 시청 기록을 일괄 조회(`whereIn`), 다른 기기에서 시청한 영상의 파란 점을 자동으로 제거.
+
+## [1.2.1.0] - 2026-06-10
+
+### Fixed
+- NewPipe Extractor v0.26.2 → v0.26.3 업데이트 — YouTube SABR 강제 적용 우회 (visionOS 클라이언트, PoToken 불요). 360p 고정·chunk 403·라이브 파싱 실패가 해결되어 고화질 인앱 재생 경로 복구. 폴드/플립 실기기 재생 확인 완료.
+
 ## [1.2.0.0] - 2026-05-29
 
 ### Added
