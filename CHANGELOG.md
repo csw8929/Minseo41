@@ -2,6 +2,11 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.2.1.0] - 2026-06-10
+
+### Fixed
+- NewPipe Extractor v0.26.2 → v0.26.3 업데이트 — YouTube SABR 강제 적용 우회 (visionOS 클라이언트, PoToken 불요). 360p 고정·chunk 403·라이브 파싱 실패가 해결되어 고화질 인앱 재생 경로 복구. 폴드/플립 실기기 재생 확인 완료.
+
 ## [1.2.0.0] - 2026-05-29
 
 ### Added
