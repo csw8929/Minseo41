@@ -34,6 +34,7 @@ data class SettingsUiState(
     val orientationLocked: Boolean = false,
     val defaultFullscreen: Boolean = false,
     val refreshIntervalHours: Int = RefreshPrefs.DEFAULT_INTERVAL_HOURS,
+    val playbackMode: String = PlayerPrefs.PLAYBACK_MODE_YOUTUBE,
 )
 
 @HiltViewModel
@@ -76,6 +77,8 @@ class SettingsViewModel @Inject constructor(
                 orientationLocked = playerPrefs.getBoolean(PlayerPrefs.KEY_ORIENTATION_LOCKED, false),
                 defaultFullscreen = playerPrefs.getBoolean(PlayerPrefs.KEY_DEFAULT_FULLSCREEN, false),
                 refreshIntervalHours = refreshPrefs.intervalHours,
+                playbackMode = playerPrefs.getString(PlayerPrefs.KEY_PLAYBACK_MODE, PlayerPrefs.PLAYBACK_MODE_YOUTUBE)
+                    ?: PlayerPrefs.PLAYBACK_MODE_YOUTUBE,
             )
         }
         viewModelScope.launch {
@@ -109,6 +112,11 @@ class SettingsViewModel @Inject constructor(
             _uiState.update { it.copy(message = msg) }
             loadRefreshLogs()
         }
+    }
+
+    fun setPlaybackMode(mode: String) {
+        playerPrefs.edit().putString(PlayerPrefs.KEY_PLAYBACK_MODE, mode).apply()
+        _uiState.update { it.copy(playbackMode = mode) }
     }
 
     fun setDefaultMaxHeight(height: Int) {
