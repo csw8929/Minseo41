@@ -13,9 +13,9 @@ import javax.inject.Singleton
 
 // NewPipe Extractor 를 사용해 YouTube 영상의 스트림 URL + 자막 + 챕터 를 추출.
 // 우리 코드가 NewPipe API 를 직접 호출하는 유일한 클래스. NewPipe 버전 업데이트 시 영향
-// 범위가 이 파일 + DashMpdBuilder + SubFeedDownloader + SubFeedPoTokenProvider 로 한정된다.
+// 범위가 이 파일 + DashMpdBuilder + SubFeedDownloader 로 한정된다.
 //
-// PoTokenProvider 는 SubFeedApp.onCreate() 에서 YoutubeStreamExtractor.setPoTokenProvider() 로 주입.
+// 스트림은 v0.26.3+ visionOS 클라이언트(PoToken 불요) 경로에 의존하므로 PoTokenProvider 를 주입하지 않는다.
 // 의존 NewPipe API 목록은 같은 패키지의 README.md 참고.
 @Singleton
 class NewPipeStreamFetcher @Inject constructor(

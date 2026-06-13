@@ -11,7 +11,6 @@
 | 파일 | 책임 | NewPipe API 의존도 |
 |---|---|---|
 | `SubFeedDownloader.kt` | NewPipe 의 `Downloader` interface 구현 — OkHttp wrapper | 낮음 (interface 안정적) |
-| `SubFeedPoTokenProvider.kt` | NewPipe 의 `PoTokenProvider` 구현 — `PoTokenWebView` 위임 | 중간 (PoToken 정책 변경 시) |
 | `NewPipeStreamFetcher.kt` | `YoutubeStreamExtractor` 호출, `StreamInfo` 변환 | **높음 (메인 API surface)** |
 | `DashMpdBuilder.kt` | `AudioStream`/`VideoStream`/`ItagItem` → DASH MPD XML | 높음 (stream 모델 의존) |
 
@@ -27,8 +26,10 @@
 
 ```kotlin
 NewPipe.init(downloader: Downloader, localization: Localization)
-YoutubeStreamExtractor.setPoTokenProvider(provider: PoTokenProvider)  // static
 ```
+
+스트림 추출은 v0.26.3+ 의 visionOS 클라이언트(PoToken 불요)에 의존하므로 `setPoTokenProvider` 는 호출하지 않는다.
+WEB-context PoToken 은 NewPipe 가 쓰는 ANDROID/IOS/visionOS 스트림 클라이언트와 영구 불일치라 무용지물 (`docs/20260529_youtube-potoken-quality-wall.md` 참고).
 
 ### 서비스 진입점 (NewPipeStreamFetcher)
 
@@ -99,25 +100,6 @@ getIndexStart(): Int                               // DASH SegmentBase index ran
 getIndexEnd(): Int
 ```
 
-### PoToken (SubFeedPoTokenProvider)
-
-```kotlin
-interface PoTokenProvider {
-    fun getWebClientPoToken(videoId: String): PoTokenResult?
-    fun getWebEmbedClientPoToken(videoId: String): PoTokenResult?
-    fun getAndroidClientPoToken(videoId: String): PoTokenResult?
-    fun getIosClientPoToken(videoId: String): PoTokenResult?
-}
-
-data class PoTokenResult(
-    val visitorData: String,
-    val playerPot: String,
-    val streamingPot: String,
-    val dontProlongPot: Boolean,
-    val expirationDateMillis: Long,
-)
-```
-
 ### Downloader (SubFeedDownloader)
 
 ```kotlin
@@ -156,7 +138,6 @@ NewPipe release notes 를 이 목록과 대조해 영향 등급 매긴다:
 |---|---|---|
 | 위 목록에 없는 API 변경 | 영향 없음 | 그냥 버전만 올림 |
 | 위 목록 메서드의 시그니처 변경 | 컴파일 깨짐 | 해당 caller 수정 (이 폴더 안) |
-| `PoTokenProvider` interface 변경 | 컴파일 깨짐 | `SubFeedPoTokenProvider` 수정 |
 | `Downloader` interface 변경 | 컴파일 깨짐 | `SubFeedDownloader` 수정 |
 | `ItagItem` deprecation | 위험 | 대체 API 조사 후 `DashMpdBuilder` 수정 |
 | Rhino 버전 점프 | 위험 | ProGuard 룰 재점검 |

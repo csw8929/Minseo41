@@ -118,11 +118,11 @@ dependencies {
     // Google Sign-In
     implementation(libs.play.services.auth)
 
-    // OkHttp — RSS 파싱 + PoToken WebView 의 BotGuard 서비스 호출용
+    // OkHttp — RSS 파싱 + 자막 fetch 용
     implementation(libs.okhttp)
 
     // NewPipeExtractor — YouTube stream URL 추출 + n-param/signature deobfuscation + DASH 빌드.
-    // PoToken은 우리 PoTokenWebView 를 NewPipe 의 PoTokenProvider 에 plug 해서 공급.
+    // 스트림은 v0.26.3+ visionOS 클라이언트(PoToken 불요) 경로에 의존.
     // protobuf-javalite 를 exclude 해서 Firebase 의 protolite-well-known-types 와 duplicate class 충돌 회피.
     // NewPipe 의 proto 사용 코드는 외부 클라이언트(NewPipeService 내부 일부)에 한정되어 stream 추출 path 와 무관.
     implementation(libs.newpipe.extractor) {
