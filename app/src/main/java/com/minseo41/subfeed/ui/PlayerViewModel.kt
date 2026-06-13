@@ -264,6 +264,11 @@ object PlayerPrefs {
     const val PLAYBACK_MODE_YOUTUBE = "youtube"
     const val PLAYBACK_MODE_INAPP = "inapp"
 
+    // 개발자 옵션 — 인앱 재생의 추출 엔진. NewPipe(기본) ↔ NAS yt-dlp 프록시.
+    const val KEY_NAS_EXTRACTOR_ENABLED = "nasExtractorEnabled"
+    const val KEY_NAS_BASE_URL = "nasBaseUrl"
+    const val KEY_NAS_SECRET = "nasSecret"
+
     val QUALITY_OPTIONS: List<Int> = listOf(0, 1080, 720, 480, 360)
     val CAPTION_SCALE_OPTIONS: List<Float> = listOf(1.0f, 1.5f, 2.0f)
 
