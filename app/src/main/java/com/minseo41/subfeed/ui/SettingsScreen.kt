@@ -158,6 +158,19 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
             )
 
+            if (uiState.playbackMode == PlayerPrefs.PLAYBACK_MODE_INAPP) {
+                NasExtractorSection(
+                    enabled = uiState.nasExtractorEnabled,
+                    baseUrl = uiState.nasBaseUrl,
+                    secret = uiState.nasSecret,
+                    testResult = uiState.nasTestResult,
+                    onEnabledChange = { viewModel.setNasExtractorEnabled(it) },
+                    onBaseUrlChange = { viewModel.setNasBaseUrl(it) },
+                    onSecretChange = { viewModel.setNasSecret(it) },
+                    onTest = { viewModel.testNasConnection() },
+                )
+            }
+
             Text("기본 화질", style = MaterialTheme.typography.bodyMedium)
             QualityDefaultRow(
                 selected = uiState.defaultMaxHeight,
@@ -333,6 +346,65 @@ private fun PlaybackModeRow(selected: String, onSelect: (String) -> Unit) {
             onClick = { onSelect(PlayerPrefs.PLAYBACK_MODE_INAPP) },
             label = { Text("인앱 플레이어") },
         )
+    }
+}
+
+@Composable
+private fun NasExtractorSection(
+    enabled: Boolean,
+    baseUrl: String,
+    secret: String,
+    testResult: String?,
+    onEnabledChange: (Boolean) -> Unit,
+    onBaseUrlChange: (String) -> Unit,
+    onSecretChange: (String) -> Unit,
+    onTest: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(start = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "NAS yt-dlp 추출 (개발자)",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = enabled, onCheckedChange = onEnabledChange)
+        }
+        Text(
+            "켜면 인앱 재생 시 NAS 프록시로 먼저 추출하고, 실패하면 NewPipe 로 폴백합니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (enabled) {
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = onBaseUrlChange,
+                label = { Text("base URL (예: http://nas:8787)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = secret,
+                onValueChange = onSecretChange,
+                label = { Text("shared secret") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(onClick = onTest) { Text("연결 테스트") }
+                if (testResult != null) {
+                    Text(testResult, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
 }
 

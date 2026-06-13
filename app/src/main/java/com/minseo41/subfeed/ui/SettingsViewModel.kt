@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.minseo41.subfeed.data.AuthRepo
 import com.minseo41.subfeed.data.SubscriptionRepo
 import com.minseo41.subfeed.data.db.ChannelDao
+import com.minseo41.subfeed.data.nas.NasStreamFetcher
 import androidx.work.WorkInfo
 import com.minseo41.subfeed.data.refresh.RefreshLogEntry
 import com.minseo41.subfeed.data.refresh.RefreshPrefs
@@ -35,6 +36,10 @@ data class SettingsUiState(
     val defaultFullscreen: Boolean = false,
     val refreshIntervalHours: Int = RefreshPrefs.DEFAULT_INTERVAL_HOURS,
     val playbackMode: String = PlayerPrefs.PLAYBACK_MODE_YOUTUBE,
+    val nasExtractorEnabled: Boolean = false,
+    val nasBaseUrl: String = "",
+    val nasSecret: String = "",
+    val nasTestResult: String? = null,
 )
 
 @HiltViewModel
@@ -44,6 +49,7 @@ class SettingsViewModel @Inject constructor(
     private val authRepo: AuthRepo,
     private val refreshPrefs: RefreshPrefs,
     private val refreshScheduler: RefreshScheduler,
+    private val nasStreamFetcher: NasStreamFetcher,
     channelDao: ChannelDao,
 ) : ViewModel() {
 
@@ -79,6 +85,9 @@ class SettingsViewModel @Inject constructor(
                 refreshIntervalHours = refreshPrefs.intervalHours,
                 playbackMode = playerPrefs.getString(PlayerPrefs.KEY_PLAYBACK_MODE, PlayerPrefs.PLAYBACK_MODE_YOUTUBE)
                     ?: PlayerPrefs.PLAYBACK_MODE_YOUTUBE,
+                nasExtractorEnabled = playerPrefs.getBoolean(PlayerPrefs.KEY_NAS_EXTRACTOR_ENABLED, false),
+                nasBaseUrl = playerPrefs.getString(PlayerPrefs.KEY_NAS_BASE_URL, "").orEmpty(),
+                nasSecret = playerPrefs.getString(PlayerPrefs.KEY_NAS_SECRET, "").orEmpty(),
             )
         }
         viewModelScope.launch {
@@ -117,6 +126,34 @@ class SettingsViewModel @Inject constructor(
     fun setPlaybackMode(mode: String) {
         playerPrefs.edit().putString(PlayerPrefs.KEY_PLAYBACK_MODE, mode).apply()
         _uiState.update { it.copy(playbackMode = mode) }
+    }
+
+    fun setNasExtractorEnabled(enabled: Boolean) {
+        playerPrefs.edit().putBoolean(PlayerPrefs.KEY_NAS_EXTRACTOR_ENABLED, enabled).apply()
+        _uiState.update { it.copy(nasExtractorEnabled = enabled) }
+    }
+
+    fun setNasBaseUrl(url: String) {
+        playerPrefs.edit().putString(PlayerPrefs.KEY_NAS_BASE_URL, url).apply()
+        _uiState.update { it.copy(nasBaseUrl = url) }
+    }
+
+    fun setNasSecret(secret: String) {
+        playerPrefs.edit().putString(PlayerPrefs.KEY_NAS_SECRET, secret).apply()
+        _uiState.update { it.copy(nasSecret = secret) }
+    }
+
+    fun testNasConnection() {
+        val state = _uiState.value
+        if (state.nasBaseUrl.isBlank()) {
+            _uiState.update { it.copy(nasTestResult = "base URL 을 입력하세요") }
+            return
+        }
+        _uiState.update { it.copy(nasTestResult = "테스트 중...") }
+        viewModelScope.launch {
+            val ok = nasStreamFetcher.testConnection(state.nasBaseUrl, state.nasSecret)
+            _uiState.update { it.copy(nasTestResult = if (ok) "연결 성공" else "연결 실패") }
+        }
     }
 
     fun setDefaultMaxHeight(height: Int) {

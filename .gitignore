@@ -28,5 +28,8 @@ local.properties
 .claude/*
 !.claude/commands/
 
+# codex 세션 등 로컬 툴 아티팩트
+.context/
+
 # Gradle wrapper jar는 포함 (wrapper properties만으로 빌드 불가)
 !gradle/wrapper/gradle-wrapper.jar

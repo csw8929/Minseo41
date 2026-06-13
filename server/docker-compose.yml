@@ -1,0 +1,25 @@
+services:
+  subfeed-extractor:
+    build: .
+    image: subfeed-extractor:latest
+    container_name: subfeed-extractor
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      # 앱 설정의 shared secret 과 동일하게. 빈 값이면 인증 생략(비권장).
+      SUBFEED_SECRET: "${SUBFEED_SECRET:-}"
+      BGUTIL_BASE_URL: "http://bgutil-provider:4416"
+      TOKEN_TTL_SECONDS: "7200"
+      RATE_LIMIT_PER_HOUR: "30"
+    depends_on:
+      - bgutil-provider
+
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: bgutil-provider
+    restart: unless-stopped
+    # 내부 네트워크에서 subfeed-extractor 가 http://bgutil-provider:4416 으로 접근.
+    # 외부 포트 노출 불필요.
+    expose:
+      - "4416"

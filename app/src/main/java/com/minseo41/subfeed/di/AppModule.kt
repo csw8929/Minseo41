@@ -2,7 +2,7 @@ package com.minseo41.subfeed.di
 
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
-import com.minseo41.subfeed.data.NewPipeVideoExtractor
+import com.minseo41.subfeed.data.DispatchingVideoExtractor
 import com.minseo41.subfeed.data.VideoExtractor
 import dagger.Binds
 import dagger.Module
@@ -16,7 +16,7 @@ import javax.inject.Singleton
 abstract class ExtractorModule {
     @Binds
     @Singleton
-    abstract fun bindVideoExtractor(impl: NewPipeVideoExtractor): VideoExtractor
+    abstract fun bindVideoExtractor(impl: DispatchingVideoExtractor): VideoExtractor
 }
 
 @Module
