@@ -54,6 +54,23 @@ codex review 에서 잡은 실제 버그 수정:
 
 `./gradlew assembleDebug` 성공, 플립(R3CX705W62D) 설치. NAS 컨테이너는 사용자가 직접 배포(아래).
 
+## 로컬 검증 (2026-06-14, Docker 없이 venv)
+
+이 PC 엔 Docker 가 없어 venv 로 server 를 직접 띄워 검증:
+- requirements 핀 전부 클린 설치 (yt-dlp 2026.6.9, bgutil 1.3.1, fastapi 0.115.6 …)
+- FastAPI 부팅 / `/health` OK
+- 실제 추출 성공 → `/media` range-proxy 가 실 googlevideo 에 대해 **206 + 정확한
+  Content-Range/Content-Length/Accept-Ranges** 반환 (head `bytes=0-2047`, mid-file `bytes=5000000-…` 둘 다),
+  인증 401(secret 없음/틀림)·404(잘못된 토큰) 정상
+- **미검증**: `mweb`+bgutil (Node/Docker provider 필요 → NAS 에서 확인)
+
+이 검증 과정에서 운영 유연성 env 추가(아래):
+- `YT_PLAYER_CLIENT`(기본 mweb), `USE_BGUTIL`(기본 true), `YT_FORMAT`(기본 progressive muxed).
+  YouTube 변동 시 NAS env 만 바꿔 대응 (앱 재빌드 불필요). 상세: `server/README.md`.
+
+발견: `android_vr` + `USE_BGUTIL=false` 는 PO 토큰·사이드카 없이 progressive itag18(360p) 반환.
+bgutil 배포가 막힐 때 단순 폴백으로 쓸 수 있으나, NewPipe visionOS 와 같은 클라이언트 계열이라 내구성 이점은 적음.
+
 ## 확인 리스트
 
 ### NAS (사용자 직접)

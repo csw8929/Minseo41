@@ -12,6 +12,11 @@ services:
       BGUTIL_BASE_URL: "http://bgutil-provider:4416"
       TOKEN_TTL_SECONDS: "7200"
       RATE_LIMIT_PER_HOUR: "30"
+      # YouTube 정책 변동 시 조정 (기본: mweb + bgutil). 자세한 건 README "환경 변수".
+      # YT_PLAYER_CLIENT: "mweb"
+      # USE_BGUTIL: "true"
+      # YT_FORMAT: "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]"
+      # PUBLIC_BASE_URL: ""
     depends_on:
       - bgutil-provider
 
