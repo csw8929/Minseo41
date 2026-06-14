@@ -2,6 +2,19 @@
 
 All notable changes to SubFeed are documented in this file.
 
+## [1.4.0.0] - 2026-06-14
+
+### Added
+- **NAS yt-dlp 추출 프록시 (개발자 옵션)** — NewPipe(visionOS)가 깨졌을 때의 내구성 보험. NAS(`server/`)에서 yt-dlp 로 추출하고 미디어 바이트를 range-proxy 한다. 설정 → 인앱 플레이어 → "NAS yt-dlp 추출(개발자)" 토글 + base URL + shared secret + 연결 테스트.
+- **추출기 분기 + 폴백** — `DispatchingVideoExtractor` 가 NAS 토글 ON 시 NAS 로 추출, 실패 시 NewPipe → YouTube 앱으로 자동 폴백. 피드는 항상 RSS.
+- **server/ 운영 env** — `YT_PLAYER_CLIENT`/`USE_BGUTIL`/`YT_FORMAT` 등으로 YouTube 변동 시 앱 재빌드 없이 NAS 만 조정. v1 기본 `android_vr`(progressive itag18 360p). 플립 실기기 재생 확인.
+
+### Fixed
+- **cleartext HTTP 허용** — `AndroidManifest` 에 `usesCleartextTraffic="true"` 추가. NAS 를 `http://` 로 호출하므로 없으면 연결 실패.
+
+### Removed
+- **WEB PoToken 추출 경로** — `data/potoken/` + `SubFeedPoTokenProvider` 제거. WEB 토큰은 NewPipe 가 쓰는 스트림 클라이언트와 영구 불일치라 미사용 dead code 였음.
+
 ## [1.3.0.0] - 2026-06-10
 
 ### Added

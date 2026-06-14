@@ -24,10 +24,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 SHARED_SECRET = os.environ.get("SUBFEED_SECRET", "")
 BGUTIL_BASE_URL = os.environ.get("BGUTIL_BASE_URL", "http://bgutil-provider:4416")
-# 추출 클라이언트. 기본 mweb(+bgutil PO토큰). YouTube 정책 변동 시 env 로 교체.
-YT_PLAYER_CLIENT = os.environ.get("YT_PLAYER_CLIENT", "mweb")
-# bgutil PO토큰 provider 사용 여부. mweb/web 계열은 필요, tv/android_vr 등은 불요.
-USE_BGUTIL = os.environ.get("USE_BGUTIL", "true").strip().lower() not in ("0", "false", "no")
+# 추출 클라이언트. v1 기본 android_vr — 실측 결과 progressive muxed(itag18) 를 반환하는 클라이언트.
+# (mweb 은 PO토큰까지 되지만 adaptive 만 줘서 v1 muxed 경로에선 못 씀 → mweb 은 v2 DASH 작업 후.)
+YT_PLAYER_CLIENT = os.environ.get("YT_PLAYER_CLIENT", "android_vr")
+# bgutil PO토큰 provider 사용 여부. mweb/web 계열은 필요, android_vr/tv 등은 불요.
+USE_BGUTIL = os.environ.get("USE_BGUTIL", "false").strip().lower() not in ("0", "false", "no")
 # 포맷 선택자. 기본 progressive(muxed) — DASH/HLS 재작성 회피. YouTube 변동 시 env 로 조정.
 YT_FORMAT = os.environ.get(
     "YT_FORMAT",
