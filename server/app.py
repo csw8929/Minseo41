@@ -24,6 +24,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 SHARED_SECRET = os.environ.get("SUBFEED_SECRET", "")
 BGUTIL_BASE_URL = os.environ.get("BGUTIL_BASE_URL", "http://bgutil-provider:4416")
+# 추출 클라이언트. 기본 mweb(+bgutil PO토큰). YouTube 정책 변동 시 env 로 교체.
+YT_PLAYER_CLIENT = os.environ.get("YT_PLAYER_CLIENT", "mweb")
+# bgutil PO토큰 provider 사용 여부. mweb/web 계열은 필요, tv/android_vr 등은 불요.
+USE_BGUTIL = os.environ.get("USE_BGUTIL", "true").strip().lower() not in ("0", "false", "no")
+# 포맷 선택자. 기본 progressive(muxed) — DASH/HLS 재작성 회피. YouTube 변동 시 env 로 조정.
+YT_FORMAT = os.environ.get(
+    "YT_FORMAT",
+    "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
+)
 # reverse proxy 뒤(DDNS/HTTPS)면 request.base_url 이 내부 주소가 될 수 있으니 명시 override.
 # Tailscale 직접 접속이면 비워둬도 request.base_url 이 정확하다.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "")
@@ -83,17 +92,17 @@ def _resolve_token(token: str) -> str:
 
 def _extract(video_id: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
+    extractor_args = {"youtube": {"player_client": [YT_PLAYER_CLIENT]}}
+    if USE_BGUTIL:
+        extractor_args["youtubepot-bgutilhttp"] = {"base_url": [BGUTIL_BASE_URL]}
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         # progressive(muxed) 우선 — DASH/HLS 재작성 회피. v1 은 화질 360~720p 캡.
         # MP4 우선, 없으면 다른 muxed(webm 등). muxed 가 아예 없으면 추출 실패 → 앱이 NewPipe 폴백.
-        "format": "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
-        "extractor_args": {
-            "youtube": {"player_client": ["mweb"]},
-            "youtubepot-bgutilhttp": {"base_url": [BGUTIL_BASE_URL]},
-        },
+        "format": YT_FORMAT,
+        "extractor_args": extractor_args,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
