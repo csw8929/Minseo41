@@ -87,8 +87,17 @@ bgutil 배포가 막힐 때 단순 폴백으로 쓸 수 있으나, NewPipe visio
 9. NAS 끄고 재생 → NewPipe 로 자동 폴백되는지
 10. LAN 밖(셀룰러)에서 Tailscale 통해 재생되는지 (대역폭 한계 체감)
 
+## 실기기 동작 확인 (2026-06-14, v1.4.0.0)
+
+시놀로지 NAS(Container Manager, `docker-compose` v1 하이픈)에 배포 → 플립(R3CX705W62D) end-to-end 재생 확인.
+
+배포/검증 중 확정된 사실 두 가지:
+- **mweb 은 v1 에서 못 쓴다** — mweb+bgutil 추출은 되지만(PO토큰 OK) **progressive muxed 가 없고 adaptive 만** 반환 → `/extract` 가 "Requested format is not available" 502. 그래서 **v1 기본을 `android_vr`(progressive itag18 360p, PO토큰 불요) 로 변경.** mweb 견고 경로는 DASH 조립(v2) 후로 미룸. compose 의 `bgutil-provider` 도 기본 주석 처리.
+- **cleartext HTTP 필수** — 앱이 NAS 를 `http://` 로 부르므로 `AndroidManifest` 에 `usesCleartextTraffic="true"` 없으면 "연결 실패". 추가함(다른 NAS 앱들과 동일 관례).
+
 ## 한계 / 다음
 
-- v1 화질 360~720p 캡 (progressive only). 고화질 DASH 분리 스트림 + manifest 재작성은 v1 이후.
+- v1 화질 360p 캡 (android_vr progressive). 고화질은 **v2: mweb+bgutil + DASH 분리 스트림 조립(manifest 재작성)** 필요.
 - 동시 시청은 가정 업로드 대역폭에 묶임 (개인용 전제).
 - 자막(`captionTracks`)은 v1 미지원(빈 배열).
+- android_vr 은 NewPipe visionOS 와 같은 계열이라 내구성 이점은 제한적 — 같이 깨지면 v2(mweb)로 전환.

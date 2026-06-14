@@ -12,19 +12,20 @@ services:
       BGUTIL_BASE_URL: "http://bgutil-provider:4416"
       TOKEN_TTL_SECONDS: "7200"
       RATE_LIMIT_PER_HOUR: "30"
-      # YouTube 정책 변동 시 조정 (기본: mweb + bgutil). 자세한 건 README "환경 변수".
-      # YT_PLAYER_CLIENT: "mweb"
-      # USE_BGUTIL: "true"
+      # v1 기본: android_vr (progressive muxed 360p, PO토큰 불요). 실기기 재생 확인됨.
+      # 더 견고한 mweb+bgutil 은 adaptive 만 줘서 v2(DASH 조립) 필요 → 그때 아래를 mweb/true 로.
+      YT_PLAYER_CLIENT: "android_vr"
+      USE_BGUTIL: "false"
       # YT_FORMAT: "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]"
       # PUBLIC_BASE_URL: ""
-    depends_on:
-      - bgutil-provider
+    # v1 기본(android_vr)은 bgutil 불필요. mweb/v2 로 갈 때 아래 depends_on + bgutil-provider 서비스 주석 해제.
+    # depends_on:
+    #   - bgutil-provider
 
-  bgutil-provider:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
-    container_name: bgutil-provider
-    restart: unless-stopped
-    # 내부 네트워크에서 subfeed-extractor 가 http://bgutil-provider:4416 으로 접근.
-    # 외부 포트 노출 불필요.
-    expose:
-      - "4416"
+  # mweb/web 계열 PO토큰 provider. v1(android_vr)에선 미사용 → 기본 비활성.
+  # bgutil-provider:
+  #   image: brainicism/bgutil-ytdlp-pot-provider:latest
+  #   container_name: bgutil-provider
+  #   restart: unless-stopped
+  #   expose:
+  #     - "4416"
